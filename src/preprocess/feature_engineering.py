@@ -47,9 +47,8 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     # ===== 5. 결과 저장 =====
     if output_path:
         df.to_csv(output_path, index=False)
-        print(f"✅ 전처리 완료: '{output_path}'로 저장됨")
     else:
-        print("✅ 전처리 완료 (저장 안 함)")
+        print("전처리 완료, 저장 안 함")
 
     print("최종 데이터 shape:", df.shape)
     return df
@@ -73,7 +72,7 @@ def cluster_customers(input_path: str, n_clusters: int = 3, kmeans_name_map: dic
     X_scaled = scaler.fit_transform(X)
 
     # ------------------
-    # 1️⃣ K-Means 군집
+    # 1️. K-Means 군집
     # ------------------
     kmeans = KMeans(n_clusters=n_clusters, random_state=42)
     df['kmeans_cluster_id'] = kmeans.fit_predict(X_scaled)
@@ -82,7 +81,7 @@ def cluster_customers(input_path: str, n_clusters: int = 3, kmeans_name_map: dic
         df['cluster_name'] = df['kmeans_cluster_id'].map(kmeans_name_map)
 
     # ------------------
-    # 2️⃣ DBSCAN 군집
+    # 2️. DBSCAN 군집
     # ------------------
     # eps와 min_samples 계산 참고
     if dbscan_eps is None or dbscan_min_samples is None:
@@ -98,18 +97,17 @@ def cluster_customers(input_path: str, n_clusters: int = 3, kmeans_name_map: dic
         plt.ylabel(f'{k}번째 이웃 거리')
         plt.grid(True)
         plt.show()
-        print("✅ 그래프를 참고해 eps와 min_samples를 결정하세요.")
 
     if dbscan_eps is not None and dbscan_min_samples is not None:
         dbscan = DBSCAN(eps=dbscan_eps, min_samples=dbscan_min_samples)
         df['dbscan_cluster_id'] = dbscan.fit_predict(X_scaled)
 
     # ------------------
-    # 3️⃣ 저장 및 시각화
+    # 3️. 저장 및 시각화
     # ------------------
     if output_path:
         df.to_csv(output_path, index=False)
-        print(f"✅ 군집화 결과 저장: '{output_path}'")
+        print(f"군집화 결과 저장: '{output_path}'")
 
     if visualize:
         plt.figure(figsize=(10,6))
@@ -129,7 +127,7 @@ if __name__ == "__main__":
         visualize=True
     )
 
-    # 2️⃣ K-Means 이름 매핑
+    # K-Means 이름 매핑
     cluster_name_map = {
         0: '표준 단기 고객 (월정액)',
         1: '알뜰형 장기 고객 (2년 약정, 저CLTV)',
@@ -163,13 +161,13 @@ if __name__ == "__main__":
         29: '안정적인 장기 고객 (월정액)'
     }
 
-    # 3️⃣ 군집화
+    # 군집화
     clustered_df = cluster_customers(
         input_path="data/processed/telco_cleaned_data.csv",
         n_clusters=6,
         kmeans_name_map=cluster_name_map,
         dbscan_eps=None,          # eps 결정 전 None
         dbscan_min_samples=None,  # min_samples 결정 전 None
-        output_path="data/processed/telco_clustered.csv",
+        output_path="data/processed/telco_cleaned_data.csv",
         visualize=True
     )
