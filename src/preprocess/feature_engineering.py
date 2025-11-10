@@ -17,7 +17,7 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     - 선택적 시각화 및 CSV 저장
     """
     # ===== 1. 데이터 불러오기 =====
-    df = pd.read_csv(input_path)
+    df = pd.read_csv(input_path,encoding="cp949")
 
     # ===== 2. 날짜형 변환 & 서비스 이용 기간 =====
     df['StartDate'] = pd.to_datetime(df['StartDate'])
