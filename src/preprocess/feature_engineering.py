@@ -31,6 +31,11 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     df['TotalOtherCharges'] = df['TotalExtraDataCharge'] + df['TotalRoamCharge']
     df['LTVPerSatis'] = df['CustomerLTV'] / df['SatisScore']
 
+     #윤진
+    #Is_Manual_Payment
+    manual_payment_list = ['신용카드', '이체/메일확인']
+    df['Is_Manual_Payment'] = df['PaymentMethod'].isin(manual_payment_list).astype(int)
+
     # ===== 4. 결측치 처리 =====
     # 수치형: 평균 대체
     num_cols = df.select_dtypes(include=[np.number]).columns
