@@ -27,6 +27,10 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     # ===== 3. 파생 변수 생성 =====
     df['CLTV_monthly'] = df['CustomerLTV'] / df['ServiceDuration']
 
+     #민주
+    df['TotalOtherCharges'] = df['TotalExtraDataCharge'] + df['TotalRoamCharge']
+    df['LTVPerSatis'] = df['CustomerLTV'] / df['SatisScore']
+
     # ===== 4. 결측치 처리 =====
     # 수치형: 평균 대체
     num_cols = df.select_dtypes(include=[np.number]).columns
