@@ -89,6 +89,12 @@ def generate_recommendations(df):
 
     return df
 
+    # ------------------
+    # 3. 대조분석 추천
+    # ------------------
+
+    
+
 
 
 if __name__ == "__main__":
