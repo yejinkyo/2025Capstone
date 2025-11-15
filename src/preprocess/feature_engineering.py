@@ -17,7 +17,7 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     - 선택적 시각화 및 CSV 저장
     """
     # ===== 1. 데이터 불러오기 =====
-    df = pd.read_csv(input_path,encoding="cp949")
+    df = pd.read_csv(input_path, encoding="utf-8")
 
     # ===== 2. 날짜형 변환 & 서비스 이용 기간 =====
     df['StartDate'] = pd.to_datetime(df['StartDate'])
@@ -27,11 +27,9 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     # ===== 3. 파생 변수 생성 =====
     df['CLTV_monthly'] = df['CustomerLTV'] / df['ServiceDuration']
 
-     #민주
     df['TotalOtherCharges'] = df['TotalExtraDataCharge'] + df['TotalRoamCharge']
     df['LTVPerSatis'] = df['CustomerLTV'] / df['SatisScore']
 
-     #윤진
     #Is_Manual_Payment
     manual_payment_list = ['신용카드', '이체/메일확인']
     df['Is_Manual_Payment'] = df['PaymentMethod'].isin(manual_payment_list).astype(int)
@@ -180,6 +178,3 @@ if __name__ == "__main__":
         output_path="data/processed/telco_cleaned_data.csv",
         visualize=True
     )
-
-    #하이
-    #감사합니당
