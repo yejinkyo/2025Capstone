@@ -12,7 +12,7 @@ def split_data(df, target_col, test_size=0.2, random_state=42):
     target_col: str
         타겟 변수 이름
     test_size: float
-        테스트 데이터터 비율
+        테스트 데이터 비율
     random_state: int
         랜덤 시드 값
     
@@ -32,8 +32,8 @@ def split_data(df, target_col, test_size=0.2, random_state=42):
         stratify=y
     )
 
-    X_train = X_train.drop(columns=['CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name"], errors='ignore')
-    X_test = X_test.drop(columns=['CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name"], errors='ignore')
+    X_train = X_train.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
+    X_test = X_test.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
 
 
     return X_train, X_test, y_train, y_test
