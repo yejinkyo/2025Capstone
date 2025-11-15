@@ -32,8 +32,8 @@ def split_data(df, target_col, test_size=0.2, random_state=42):
         stratify=y
     )
 
-    X_train = X_train.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
-    X_test = X_test.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
+    X_train = X_train.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'ReasonCategory', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
+    X_test = X_test.drop(columns=['Unnamed: 0', 'CustomerId', 'StartDate', 'EndDate', 'EndDateTmp', 'ChurnCategory', 'ChurnReason', 'ChurnScore', 'ReasonCategory', 'kmeans_cluster_id', "cluster_name", "ChurnLabel"], errors='ignore')
 
 
     return X_train, X_test, y_train, y_test
