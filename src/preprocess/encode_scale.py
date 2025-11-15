@@ -20,10 +20,14 @@ def preprocess_data(X_train, X_test, y_train, y_test):
     X_test = pd.get_dummies(X_test, columns=dummy_cols, drop_first=True)
     X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
 
+    X_train = X_train.astype(int, errors='ignore')
+    X_test = X_test.astype(int, errors='ignore')
+
     # Standardization
     scale_cols = ['Age', 'AvgDownloadGB', 'CustomerLTV', 'TotalExtraDataCharge',
                   'AvgRoamCharge', 'TotalRoamCharge', 
-                  'noReferrals', 'noDependents']
+                  'noReferrals', 'noDependents', 'SatisScore', 'Tenure_month', 'Sum_charge', 'Monthly_charge', 'ServiceDuration',
+                  'CLTV_monthly', 'TotalOtherCharges', 'LTVPerSatis', 'Is_Manual_Payment']
     scaler = StandardScaler()
     X_train[scale_cols] = scaler.fit_transform(X_train[scale_cols])
     X_test[scale_cols] = scaler.transform(X_test[scale_cols])
