@@ -2,16 +2,19 @@ import pandas as pd
 from surprise import Dataset, Reader, KNNBasic
 from surprise.model_selection import train_test_split
 from surprise import SVD
+from surprise import get_dataset_dir 
+import numpy as np
 
 def generate_recommendations(df):
     """
     고객 데이터 기반 추천 서비스 생성 (Rule-based + 협업 필터링)
-    - cluster_name, AvgDownloadGB, SatisScore, ChurnScore 활용
+    - cluster_name, AvgDownloadGB, SatisScore, ChurnScore, PaperlessBilling, PaymentMethod, Married, Dependents 활용
     - 과거 서비스 선호 데이터를 기반으로 협업 필터링 추천 추가
     """
     # ------------------
     # 1️. Rule-based 추천
     # ------------------
+    
     cluster_services_map = {
         '표준 단기 고객 (월정액)': ['Standard Plan'],
         '알뜰형 장기 고객 (2년 약정, 저CLTV)': ['Budget Plan'],
@@ -23,22 +26,39 @@ def generate_recommendations(df):
     }
 
     df['RecommendedServices'] = df['cluster_name'].apply(lambda x: cluster_services_map.get(x, []))
+    
 
-    # 사용량 기반 추천
+    # 1. 사용량 기반 추천
     df['RecommendedServices'] = df.apply(
         lambda row: row['RecommendedServices'] + ['UnlimitedData'] if row['AvgDownloadGB'] > 20 else row['RecommendedServices'],
         axis=1
     )
 
-    # 만족도 기반 추천
+    # 2. 만족도 기반 추천
     df['RecommendedServices'] = df.apply(
         lambda row: row['RecommendedServices'] + ['TechSupport'] if row['SatisScore'] < 3 else row['RecommendedServices'],
         axis=1
     )
 
-    # 이탈 위험 기반 추천
+    # 3. 이탈 위험 기반 추천
     df['RecommendedServices'] = df.apply(
         lambda row: row['RecommendedServices'] + ['OnlineBackup'] if row['ChurnScore'] > 60 else row['RecommendedServices'],
+        axis=1
+    )
+
+    # 4. 디지털 선호 기반 추천
+    df['RecommendedServices'] = df.apply(
+        lambda row: list(set(row['RecommendedServices'] + ['TechSupport'])) 
+        if (row['PaperlessBilling'] == 'Yes' and row['PaymentMethod'] == 'Electronic check') 
+        else row['RecommendedServices'],
+        axis=1
+    )
+
+    # 5. 가족 기반 추천
+    df['RecommendedServices'] = df.apply(
+        lambda row: row['RecommendedServices'] + ['FamilyPlan']
+        if (row['Married'] == 'Yes' or row['Dependents'] == 'Yes')
+        else row['RecommendedServices'],
         axis=1
     )
 
@@ -95,5 +115,5 @@ if __name__ == "__main__":
     df = pd.read_csv("data/processed/telco_cleaned_data.csv", encoding="utf-8")
     df = generate_recommendations(df)
 
-    print(df[['CustomerId', 'cluster_name', 'SatisScore', 'ChurnScore', 'RecommendedServices']].head())
-
+    print(df[['CustomerId', 'cluster_name', 'RecommendedServices']].head())
+    
