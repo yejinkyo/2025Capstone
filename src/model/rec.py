@@ -110,6 +110,12 @@ def generate_recommendations(df):
 
     return df
 
+    # ------------------
+    # 3. 대조분석 추천
+    # ------------------
+
+    
+
 
 #lr 이탈 예측 모델 함수
 def predict_churn_probability(model, A_input_df, feature_list):
