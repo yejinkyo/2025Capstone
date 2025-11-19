@@ -2,6 +2,7 @@ from imblearn.over_sampling import SMOTE
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score
 import pandas as pd
+import joblib
 
 def train_and_evaluate(X_train, y_train, X_test, y_test, model=None):
     """
@@ -76,3 +77,5 @@ if __name__ == "__main__":
     model, y_pred = train_and_evaluate(X_train, y_train, X_test, y_test)
 
     fi = get_feature_importance(model, X_train.columns.tolist(), top_n=20)
+
+    joblib.dump(model, 'lr_model.joblib')
