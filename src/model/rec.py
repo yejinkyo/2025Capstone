@@ -20,6 +20,15 @@ def generate_recommendations(df):
     # 1️. Rule-based 추천
     # ------------------
     
+    # ------------------
+    # 기준 통계치 계산 (데이터프레임의 현재 평균 사용)
+    # ------------------
+    # 중앙값 사용
+    median_download_gb = df['AvgDownloadGB'].median()
+    median_satis_score = df['SatisScore'].median()
+    # 평균 사용
+    avg_churn_score = df['ChurnScore'].mean()
+
     cluster_services_map = {
         '표준 단기 고객 (월정액)': ['Standard Plan'],
         '알뜰형 장기 고객 (2년 약정, 저CLTV)': ['Budget Plan'],
@@ -35,25 +44,25 @@ def generate_recommendations(df):
 
     # 1. 사용량 기반 추천
     df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['UnlimitedData'] if row['AvgDownloadGB'] > 20 else row['RecommendedServices'],
+        lambda row: row['RecommendedServices'] + ['UnlimitedData'] if row['AvgDownloadGB'] > median_download_gb else row['RecommendedServices'],
         axis=1
     )
 
     # 2. 만족도 기반 추천
     df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['TechSupport'] if row['SatisScore'] < 3 else row['RecommendedServices'],
+        lambda row: row['RecommendedServices'] + ['TechSupport'] if row['SatisScore'] < median_satis_score else row['RecommendedServices'],
         axis=1
     )
 
-    # 3. 이탈 위험 기반 추천
+    #3. 이탈 위험 기반 추천
     df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['OnlineBackup'] if row['ChurnScore'] > 60 else row['RecommendedServices'],
+        lambda row: row['RecommendedServices'] + ['OnlineBackup'] if row['ChurnScore'] > avg_churn_score else row['RecommendedServices'],
         axis=1
     )
 
     # 4. 디지털 선호 기반 추천
     df['RecommendedServices'] = df.apply(
-        lambda row: list(set(row['RecommendedServices'] + ['TechSupport'])) 
+        lambda row: list(set(row['RecommendedServices'] + ['OnlineSecurity'])) 
         if (row['PaperlessBilling'] == 'Yes' and row['PaymentMethod'] == 'Electronic check') 
         else row['RecommendedServices'],
         axis=1
