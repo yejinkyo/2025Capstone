@@ -62,5 +62,8 @@ def telco_to_sentence(input_path: str) -> pd.DataFrame:
 
 if __name__ == "__main__":
     input_path = "data/processed/telco_cleaned_data.csv"
+    output_path = "data/processed/telco_narrative_corpus.csv"
     df_with_text = telco_to_sentence(input_path)
     print(df_with_text[["CustomerId", "text"]].head())
+
+    df_with_text.to_csv(output_path, index=False, encoding='utf-8')
