@@ -17,7 +17,7 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     - 선택적 시각화 및 CSV 저장
     """
     # ===== 1. 데이터 불러오기 =====
-    df = pd.read_csv(input_path, encoding="utf-8")
+    df = pd.read_csv(input_path, encoding="cp949")
 
     # ===== 2. 날짜형 변환 & 서비스 이용 기간 =====
     df['StartDate'] = pd.to_datetime(df['StartDate'])
@@ -44,6 +44,11 @@ def preprocess_telco(input_path: str, output_path: str = None, visualize: bool =
     cat_cols = df.select_dtypes(include=['object']).columns
     imputer_cat = SimpleImputer(strategy='most_frequent')
     df[cat_cols] = imputer_cat.fit_transform(df[cat_cols])
+
+    # ===== 고객 아이디 문자열 제거 =====
+    def clean_id(customer_id):
+        return customer_id.replace('C-', '')
+    df['CustomerId'] = df['CustomerId'].apply(clean_id)
 
     if visualize:
         plt.figure(figsize=(12, 6))
