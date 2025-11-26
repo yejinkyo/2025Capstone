@@ -8,118 +8,208 @@ from sentence_transformers import SentenceTransformer, util
 import joblib
 import os
 
-def generate_recommendations(df):
+# ==========================================
+# 0. 사전 준비 단계 (서버 시작 시 1회 실행 가정)
+# ==========================================
+def prepare_data_pipeline(df):
     """
-    고객 데이터 기반 추천 서비스 생성 (Rule-based + 협업 필터링)
-    - cluster_name, AvgDownloadGB, SatisScore, ChurnScore, PaperlessBilling, PaymentMethod, Married, Dependents 활용
-    - 과거 서비스 선호 데이터를 기반으로 협업 필터링 추천 추가
+    데이터 전처리 및 통계 계산, 모델 학습
     """
-    # ------------------
-    # 1️. Rule-based 추천
-    # ------------------
-    
-    # ------------------
-    # 기준 통계치 계산 (데이터프레임의 현재 평균 사용)
-    # ------------------
-    # 중앙값 사용
-    median_download_gb = df['AvgDownloadGB'].median()
-    median_satis_score = df['SatisScore'].median()
-    # 평균 사용
-    avg_churn_score = df['ChurnScore'].mean()
+    # 인기 서비스 집계 
+    service_candidates = ['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData']
+    available_cols = [col for col in service_candidates if col in df.columns]
 
-    cluster_services_map = {
-        '표준 단기 고객 (월정액)': ['Standard Plan'],
-        '알뜰형 장기 고객 (2년 약정, 저CLTV)': ['Budget Plan'],
-        '기술선호형 중장기 고객 (월정액)': ['Tech Plan'],
-        '초단기 신규 고객 (최대 이탈 위험군)': ['Trial Plan'],
-        '표준 중기 고객 (1년 약정)': ['Standard Plan'],
-        '고가치 장기 고객 (월정액, 고CLTV)': ['Premium Plan'],
-        # 필요한 군집 모두 추가
+    popular_services = []
+    if available_cols:
+        counts = {}
+        for col in available_cols:
+            # 데이터 값이 'Yes'인 경우만 카운트
+            counts[col] = df[col].value_counts().get('Yes', 0)
+        popular_services = sorted(counts, key=counts.get, reverse=True)[:2]
+    
+    # 룰 기반 추천용 통계 계산
+    stats = {
+        'median_download_gb': df['AvgDownloadGB'].median(),
+        'median_satis_score': df['SatisScore'].median(),
+        'avg_churn_score': df['ChurnScore'].mean(),
+        'popular_services': popular_services,
+        'cluster_map': {
+            '표준 단기 고객 (월정액)': ['Standard Plan'],
+            '알뜰형 장기 고객 (2년 약정, 저CLTV)': ['Budget Plan'],
+            '기술선호형 중장기 고객 (월정액)': ['Tech Plan'],
+            '초단기 신규 고객 (최대 이탈 위험군)': ['Trial Plan'],
+            '표준 중기 고객 (1년 약정)': ['Standard Plan'],
+            '고가치 장기 고객 (월정액, 고CLTV)': ['Premium Plan'],
+        }
     }
 
-    df['RecommendedServices'] = df['cluster_name'].apply(lambda x: cluster_services_map.get(x, []))
-    
-
-    # 1. 사용량 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['UnlimitedData'] if row['AvgDownloadGB'] > median_download_gb else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 2. 만족도 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['TechSupport'] if row['SatisScore'] < median_satis_score else row['RecommendedServices'],
-        axis=1
-    )
-
-    #3. 이탈 위험 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['OnlineBackup'] if row['ChurnScore'] > avg_churn_score else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 4. 디지털 선호 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: list(set(row['RecommendedServices'] + ['OnlineSecurity'])) 
-        if (row['PaperlessBilling'] == 'Yes' and row['PaymentMethod'] == 'Electronic check') 
-        else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 5. 가족 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['FamilyPlan']
-        if (row['Married'] == 'Yes' or row['Dependents'] == 'Yes')
-        else row['RecommendedServices'],
-        axis=1
-    )
-
-    # ------------------
-    # 2️. 협업 필터링 추천 (User-based CF)
-    # ------------------
-    # 예시: CustomerId, Service, Rating 데이터 필요
-    # 실제로는 고객 과거 서비스 이용/선호 데이터 필요
+    # 협업 필터링 모델 학습
     service_ratings = df.melt(
         id_vars=['CustomerId'],
-        value_vars=['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData'],
+        value_vars=available_cols,
         var_name='Service',
         value_name='Used'
     )
     service_ratings['Rating'] = service_ratings['Used'].apply(lambda x: 1 if x == 'Yes' else 0)
-
-    reader = Reader(rating_scale=(0,1))
-    data = Dataset.load_from_df(service_ratings[['CustomerId','Service','Rating']], reader)
-
-    # User-based CF
-    trainset = data.build_full_trainset()
-
-    # 0 벡터 고객 제거
+    
     non_zero_users = service_ratings.groupby('CustomerId')['Rating'].sum()
     valid_users = non_zero_users[non_zero_users > 0].index.tolist()
     data_valid = service_ratings[service_ratings['CustomerId'].isin(valid_users)]
-    trainset = Dataset.load_from_df(data_valid[['CustomerId','Service','Rating']], reader).build_full_trainset()
+    
+    return df, stats
 
-    sim_options = {'name': 'cosine', 'user_based': True}
-    algo = KNNBasic(sim_options=sim_options)
+def create_service_usage_cols(df, service_cols, threshold=0):
+    """
+    서비스 사용 여부를 0/1로 변환하는 함수
+    threshold: 이 값보다 크면 1로 간주
+    """
+    df_bin = df.copy()
+    for col in service_cols:
+        df_bin[col] = (df[col] > threshold).astype(int)
+    return df_bin
+
+# ==========================================
+# 1. 룰 기반 추천 함수 (User Input)
+# ==========================================
+
+def rule_based_recommendations(user_row, stats):
+    """
+    룰 기반 추천 생성하는 함수
+
+    Parameters:
+        user_row: pd.Series, 단일 고객 데이터 행
+        stats: dict, 전체 유저 기준 통계값
+
+    Returns:
+        recommendations: list, 추천 서비스 목록
+    """
+    recommendations = []
+
+    # 1. 군집 기반 추천
+    cluster = user_row.get('cluster_name')
+    recommendations.extend(stats['cluster_map'].get(cluster, []))
+
+    # 2. 사용량 기반 (중앙값 비교)
+    if user_row['AvgDownloadGB'] > stats['median_download_gb']:
+        recommendations.append('UnlimitedData')
+    
+    # 3. 만족도 기반 (중앙값 비교)
+    if user_row['SatisScore'] < stats['median_satis_score']:
+        recommendations.append('TechSupport')
+
+    # 4. 이탈 위험 기반 (평균값 비교)
+    if user_row['ChurnScore'] > stats['avg_churn_score']:
+        recommendations.append('OnlineBackup')
+
+    # 5. 디지털 선호 기반
+    digital_payment_methods = ['이체/메일확인', '신용카드', 'Electronic check']
+    if user_row['PaperlessBilling'] == 'Yes' and user_row['PaymentMethod'] in digital_payment_methods:
+        recommendations.append('OnlineSecurity')
+
+    # 6. 가족 기반
+    pass
+
+    return list(set(recommendations)) # 중복 제거 
+
+# ==========================================
+# 2. 협업 필터링 추천 함수
+# ==========================================
+def convert_yes_no(df, service_cols):
+    df_bin = df.copy()
+    for col in service_cols:
+        df_bin[col] = df_bin[col].map({"Yes": 1, "No": 0})
+        df_bin[col] = df_bin[col].fillna(0) 
+    return df_bin
+
+def build_user_item_matrix(df, service_cols):
+    """
+    사용자-아이템 행렬 생성 함수
+    """
+    records = []
+
+    for idx, row in df.iterrows():
+        user = str(row["CustomerId"])
+
+        for service in service_cols:
+            val = row[service]
+
+            # --- (1) Yes/No 처리 ---
+            if isinstance(val, str):
+                if val.lower() == "yes":
+                    rating = 1
+                elif val.lower() == "no":
+                    rating = 0
+                else:
+                    # 숫자로 바꿀 수 있을 때만 변환
+                    try:
+                        rating = int(float(val))
+                    except:
+                        rating = 0
+            else:
+                # 숫자형 (float/int)
+                try:
+                    rating = int(val)
+                except:
+                    rating = 0
+
+            # rating이 1 이상일 때만 "사용"으로 간주
+            if rating > 0:
+                records.append([user, service, 1])
+
+    ratings_df = pd.DataFrame(records, columns=['user', 'item', 'rating'])
+    return ratings_df
+
+
+def train_cf_model(ratings_df):
+    """
+    ratings_df: user-item-rating 데이터프레임
+    return: 학습된 algo, trainset
+    """
+    reader = Reader(rating_scale=(0, 1))
+    data = Dataset.load_from_df(ratings_df, reader)
+
+    trainset, testset = train_test_split(data, test_size=0.2)
+
+    algo = SVD(n_factors=50, n_epochs=20, biased=False)
     algo.fit(trainset)
 
-    # 각 고객별 top-N 추천
-    top_n = {}
-    for uid in trainset.all_users():
-        user_inner_id = uid
-        user_raw_id = trainset.to_raw_uid(uid)
-        items = trainset.all_items()
-        predictions = [algo.predict(user_raw_id, trainset.to_raw_iid(iid)) for iid in items]
-        predictions.sort(key=lambda x: x.est, reverse=True)
-        top_n[user_raw_id] = [pred.iid for pred in predictions[:2]]  # 상위 2개 서비스 추천
+    return algo, trainset
 
-    # 추천 합치기
-    df['RecommendedServices'] = df.apply(
-        lambda row: list(set(row['RecommendedServices'] + top_n.get(row['CustomerId'], []))),
-        axis=1
-    )
+def cf_recommendations(user_id, algo, trainset, service_cols=None, top_n=10):
+    """
+    특정 user_id에 대해 협업 필터링 기반 추천 생성
 
-    return df
+    Parameters:
+        user_id: str, 고객 ID
+        algo: 학습된 협업 필터링 모델
+        trainset: 학습 데이터셋
+        top_n: int, 추천할 서비스 개수
+
+    Returns:
+        recommendations: list, 추천 서비스 목록
+    """
+    user_id = str(user_id)
+
+    try:
+        # 문자열 ID를 내부 정수 ID로 변환
+        inner_uid = trainset.to_inner_uid(user_id)
+    except ValueError:
+        # 모델에 없는 신규 유저는 빈 리스트 반환
+        return []
+    
+    # 이미 사용 중인 아이템들의 내부 ID(iid)를 Set으로 저장)
+    used_items = set(trainset.to_raw_iid(iid) for (iid, _) in trainset.ur[inner_uid])
+
+    predictions = []
+    for service in service_cols:
+        if service in used_items:
+            continue
+
+        pred = algo.predict(user_id, service)
+        predictions.append((service, pred.est))
+
+    predictions.sort(key=lambda x: x[1], reverse=True)
+    return [item for item, score in predictions[:top_n]]
 
 
 # ------------------
@@ -459,9 +549,39 @@ def load_resources():
 if __name__ == "__main__":
 
     df = pd.read_csv("data/processed/telco_cleaned_data.csv", encoding="utf-8")
-    df = generate_recommendations(df)
+    
+    # 전역 통계값 및 모델 학습
+    df, stats = prepare_data_pipeline(df)
 
-    print(df[['CustomerId', 'cluster_name', 'RecommendedServices']].head())
+    user = df.iloc[0] 
+    print(user)
+
+    # ========룰 기반 추천=========
+    recs = rule_based_recommendations(user, stats)
+    print("룰 기반 추천 서비스:", recs)
+
+    # ========협업 필터링 추천=========
+    service_cols = ['PaperlessBilling', 'OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData']
+    df_bin = convert_yes_no(df, service_cols)
+
+    ratings_df = build_user_item_matrix(df, service_cols)
+    print(ratings_df.head())
+
+    algo, trainset = train_cf_model(ratings_df)
+
+    user_id = df_bin.iloc[0]['CustomerId']
+
+    # recs = cf_recommendations(
+    #     user_id=user_id,
+    #     algo=algo,
+    #     trainset=trainset,
+    #     service_cols=service_cols,
+    #     top_n=5
+    # )
+
+    # print(recs)
+
+    # ========대조분석 추천=========
 
     try:
         # 1. 리소스 로드 (한 번만 수행)
