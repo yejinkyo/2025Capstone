@@ -13,7 +13,7 @@ from sklearn.linear_model import LogisticRegression
 def preprocess_telco(df):
     df = df.copy()
 
-    # TotalCharges → 숫자 변환
+    # TotalCharges: 숫자로 변환
     df["Total Charges"] = pd.to_numeric(df["Total Charges"], errors="coerce")
     df = df.dropna(subset=["Total Charges"])
 
@@ -148,7 +148,7 @@ if __name__ == '__main__':
     print(f"서비스 컬럼 수: {len(cat_cols)}")
 
     # 3. 특정 고객에게 서비스 추천 실행
-    sample_customer = df["CustomerID"].iloc[0]   # 첫 번째 고객
+    sample_customer = df["CustomerID"].iloc[98]   # 첫 번째 고객
 
     print("\n===============================")
     print(f"고객 {sample_customer} 추천 분석")

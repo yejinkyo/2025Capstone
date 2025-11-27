@@ -4,7 +4,6 @@ import joblib
 import shap
 import matplotlib.pyplot as plt
 import os
-import shap.maskers
 
 def load_model(model_path):
     """
