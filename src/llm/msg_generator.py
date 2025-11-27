@@ -52,7 +52,7 @@ def generate_marketing_message(user_id, api_key):
 if __name__ == '__main__':
     MY_API_KEY = os.getenv("OPENAI_API_KEY")
 
-    target_user_list = ["10001", "10002"]
+    target_user_list = ["0280-XJGEX", "10002"]
 
     for user_id in target_user_list:
         result = generate_marketing_message(user_id, MY_API_KEY)
