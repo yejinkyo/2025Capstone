@@ -8,122 +8,8 @@ from sentence_transformers import SentenceTransformer, util
 import joblib
 import os
 
-def generate_recommendations(df):
-    """
-    고객 데이터 기반 추천 서비스 생성 (Rule-based + 협업 필터링)
-    - cluster_name, AvgDownloadGB, SatisScore, ChurnScore, PaperlessBilling, PaymentMethod, Married, Dependents 활용
-    - 과거 서비스 선호 데이터를 기반으로 협업 필터링 추천 추가
-    """
-    # ------------------
-    # 1️. Rule-based 추천
-    # ------------------
-    
-    # ------------------
-    # 기준 통계치 계산 (데이터프레임의 현재 평균 사용)
-    # ------------------
-    # 중앙값 사용
-    median_download_gb = df['AvgDownloadGB'].median()
-    median_satis_score = df['SatisScore'].median()
-    # 평균 사용
-    avg_churn_score = df['ChurnScore'].mean()
-
-    cluster_services_map = {
-        '표준 단기 고객 (월정액)': ['Standard Plan'],
-        '알뜰형 장기 고객 (2년 약정, 저CLTV)': ['Budget Plan'],
-        '기술선호형 중장기 고객 (월정액)': ['Tech Plan'],
-        '초단기 신규 고객 (최대 이탈 위험군)': ['Trial Plan'],
-        '표준 중기 고객 (1년 약정)': ['Standard Plan'],
-        '고가치 장기 고객 (월정액, 고CLTV)': ['Premium Plan'],
-        # 필요한 군집 모두 추가
-    }
-
-    df['RecommendedServices'] = df['cluster_name'].apply(lambda x: cluster_services_map.get(x, []))
-    
-
-    # 1. 사용량 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['UnlimitedData'] if row['AvgDownloadGB'] > median_download_gb else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 2. 만족도 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['TechSupport'] if row['SatisScore'] < median_satis_score else row['RecommendedServices'],
-        axis=1
-    )
-
-    #3. 이탈 위험 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['OnlineBackup'] if row['ChurnScore'] > avg_churn_score else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 4. 디지털 선호 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: list(set(row['RecommendedServices'] + ['OnlineSecurity'])) 
-        if (row['PaperlessBilling'] == 'Yes' and row['PaymentMethod'] == 'Electronic check') 
-        else row['RecommendedServices'],
-        axis=1
-    )
-
-    # 5. 가족 기반 추천
-    df['RecommendedServices'] = df.apply(
-        lambda row: row['RecommendedServices'] + ['FamilyPlan']
-        if (row['Married'] == 'Yes' or row['Dependents'] == 'Yes')
-        else row['RecommendedServices'],
-        axis=1
-    )
-
-    # ------------------
-    # 2️. 협업 필터링 추천 (User-based CF)
-    # ------------------
-    # 예시: CustomerId, Service, Rating 데이터 필요
-    # 실제로는 고객 과거 서비스 이용/선호 데이터 필요
-    service_ratings = df.melt(
-        id_vars=['CustomerId'],
-        value_vars=['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData'],
-        var_name='Service',
-        value_name='Used'
-    )
-    service_ratings['Rating'] = service_ratings['Used'].apply(lambda x: 1 if x == 'Yes' else 0)
-
-    reader = Reader(rating_scale=(0,1))
-    data = Dataset.load_from_df(service_ratings[['CustomerId','Service','Rating']], reader)
-
-    # User-based CF
-    trainset = data.build_full_trainset()
-
-    # 0 벡터 고객 제거
-    non_zero_users = service_ratings.groupby('CustomerId')['Rating'].sum()
-    valid_users = non_zero_users[non_zero_users > 0].index.tolist()
-    data_valid = service_ratings[service_ratings['CustomerId'].isin(valid_users)]
-    trainset = Dataset.load_from_df(data_valid[['CustomerId','Service','Rating']], reader).build_full_trainset()
-
-    sim_options = {'name': 'cosine', 'user_based': True}
-    algo = KNNBasic(sim_options=sim_options)
-    algo.fit(trainset)
-
-    # 각 고객별 top-N 추천
-    top_n = {}
-    for uid in trainset.all_users():
-        user_inner_id = uid
-        user_raw_id = trainset.to_raw_uid(uid)
-        items = trainset.all_items()
-        predictions = [algo.predict(user_raw_id, trainset.to_raw_iid(iid)) for iid in items]
-        predictions.sort(key=lambda x: x.est, reverse=True)
-        top_n[user_raw_id] = [pred.iid for pred in predictions[:2]]  # 상위 2개 서비스 추천
-
-    # 추천 합치기
-    df['RecommendedServices'] = df.apply(
-        lambda row: list(set(row['RecommendedServices'] + top_n.get(row['CustomerId'], []))),
-        axis=1
-    )
-
-    return df
-
-
 # ------------------
-# 3. 대조분석 추천
+# 1. 변수 정의
 # ------------------
 
 MODEL_FEATURE_LIST = [
@@ -163,8 +49,10 @@ BINARY_COLS = ['Married', 'PaperlessBilling', 'OnlineSecurity',
                'OnlineBackup', 'TechSupport', 'UnlimitedData']
 
 
-
+# ------------------------
 # 2. 사용자 입력 변환 함수
+# ------------------------
+
 def process_user_input_raw(consult_text: str, A_features_raw: dict) -> tuple[str, pd.DataFrame]:
     """
     사용자 입력을 받아 모델 학습 데이터와 동일한 형태의 DataFrame을 만듭니다.
@@ -219,7 +107,7 @@ def process_user_input_raw(consult_text: str, A_features_raw: dict) -> tuple[str
                         feature_data[target_col] = 1
             except: pass
 
-        # (F) PaymentMethod OHE (핵심 로직!)
+        # (F) PaymentMethod OHE
         if raw_key == 'PaymentMethod':
             mapped_pm = VALUE_MAPPING.get(clean_val, clean_val)
             
@@ -250,24 +138,42 @@ def process_user_input_raw(consult_text: str, A_features_raw: dict) -> tuple[str
     # DataFrame으로 변환하여 반환
     return consult_text, pd.DataFrame([feature_data], columns=MODEL_FEATURE_LIST)
 
-
-# 3. 이탈 확률 예측 함수 (불러온 모델 사용)
+# -------------------------
+# 3. 이탈 확률 예측 함수 
+# -------------------------
 def predict_churn_probability(model, A_input_df):
     """
     변환된 데이터(A_input_df)를 모델에 넣어 이탈 확률을 예측합니다.
-    """
-    if model is None: return 0.0
-    try:
-        # A_input_df는 이미 MODEL_FEATURE_LIST 순서대로 만들어져 있음
-        return model.predict_proba(A_input_df)[0][1]
-    except Exception as e:
-        print(f"  - [예측 오류] {e}")
-        return 0.0
+
+    Params
+    ----------
+    model: 사전 학습된 이탈 예측 모델
+    A_input_df: 사용자 입력 데이터를 변환한 DataFrame
     
+    Returns
+    ----------
+    float: 예측된 이탈 확률 (0.0 ~ 1.0 사이의 값)
+    """
+    return model.predict_proba(A_input_df)[0][1]
+
+# --------------------------
 # 4. 코사인 유사도 계산 함수
+# --------------------------
 def find_most_similar_customer_B(A_consult_text, model, corpus_embeddings, df_telco_text_raw):
     """
-    A의 상담 텍스트와 가장 유사한 B(1명)를 S-BERT로 찾습니다.
+    A의 상담 텍스트와 가장 유사한 B(1명)를 S-BERT로 찾는 함수
+
+    Params
+    --------
+    A_consult_text: A 사용자의 상담 텍스트
+    model: S-BERT 모델 객체
+    corpus_embeddings: 기존 고객 텍스트 임베딩 데이터
+    df_telco_text_raw: 기존 고객 텍스트 데이터프레임
+
+    Returns
+    --------
+    b_id: 가장 유사한 고객 B의 ID
+    b_similarity: A와 B 간의 유사도 점수
     """
     # 1. 사용자 A 텍스트 임베딩
     A_embedding = model.encode([A_consult_text], normalize_embeddings=True)
@@ -279,7 +185,7 @@ def find_most_similar_customer_B(A_consult_text, model, corpus_embeddings, df_te
     b_index = np.argmax(sim_scores)
     b_similarity = float(sim_scores[b_index])
 
-    # 4. 해당 인덱스의 고객 ID 가져오기 (컬럼명 대소문자 처리)
+    # 4. 해당 인덱스의 고객 ID 가져오기
     b_customer_row = df_telco_text_raw.iloc[b_index]
     b_id = None
     for name in ['CustomerID', 'CustomerId', 'customerID', 'id']:
@@ -290,9 +196,22 @@ def find_most_similar_customer_B(A_consult_text, model, corpus_embeddings, df_te
     print(f"  - ID: {b_id} (유사도: {b_similarity:.4f})")
     return b_id, b_similarity
 
-# 5. 유사 군집 및 대조 분석 함수
+# -----------------------------
+# 5. 유사 군집 탐색
+# -----------------------------
 def find_retained_neighbors(b_id, df):
-    """B와 같은 군집에 있는 비이탈 고객들을 찾습니다."""
+    """
+    B와 같은 군집에 있는 비이탈 고객들을 찾습니다.
+    
+    Params
+    -------
+    b_id: 고객 B의 아이디
+    df: 전체 dataframe
+
+    Returns
+    --------
+    DataFrame: 유사 군집 내 롤모델(비이탈 고객)
+    """
     id_col = 'CustomerID'
     for col in df.columns:
         if col.lower() in ['customerid', 'id']: id_col = col; break
@@ -310,15 +229,23 @@ def find_retained_neighbors(b_id, df):
     print(f"--- 6. 유사 군집 내 롤모델 {len(neighbors)}명 탐색 ---")
     return neighbors
 
+# ---------------------
+# 6. 대조분석
+# ---------------------
 def perform_contrastive_analysis(A_input_df, retained_neighbors_df):
     """
     대조 분석 및 추천
+
+    Params
+    -------
+    A_input_df: A고객의 정보
+    retained_neighbors_df: 비이탈 고객 dataframe
     """
     print(f"\n--- 7. 이탈 방지 대책 추천 (대조 분석) ---")
     recommendations = []
 
     if retained_neighbors_df.empty:
-        print("  - [알림] 비교할 롤모델(유사 비이탈 그룹)이 없어 추천을 생략합니다.")
+        print("  - 비교할 롤모델(유사 비이탈 그룹)이 없어 추천을 생략합니다.")
         return recommendations
 
     # ---------------------------------------
@@ -349,7 +276,7 @@ def perform_contrastive_analysis(A_input_df, retained_neighbors_df):
         
         # 나는 안 씀(0) AND 그룹 가입률이 50% 이상임
         if val == 0 and group_rate >= 0.5:
-            recommendations.append(f"✅ [{col}] 가입 추천 (유사그룹 가입률: {group_rate:.0%})")
+            recommendations.append(f"[{col}] 가입 추천 (유사그룹 가입률: {group_rate:.0%})")
 
 
     # ---------------------------------------
@@ -387,7 +314,7 @@ def perform_contrastive_analysis(A_input_df, retained_neighbors_df):
 
                 # 추천 조건: 내가 안 쓰고 있고, 그룹의 40% 이상이 쓸 때
                 if not is_using and ratio >= 0.4:
-                    recommendations.append(f"🔄 [{col}] 변경 추천: '{mode_val}' (유사그룹 {ratio:.0%} 이용)")
+                    recommendations.append(f"[{col}] 변경 추천: '{mode_val}' (유사그룹 {ratio:.0%} 이용)")
 
 
     # ---------------------------------------
@@ -407,6 +334,9 @@ def perform_contrastive_analysis(A_input_df, retained_neighbors_df):
 
     return recommendations
 
+# ---------------
+# 7. 추천 실행
+# ---------------
 def generate_recommendations_contrast(user_text, user_feats, lr_model, sbert_model, corpus_emb, df_text, df_cluster):
     # 1. 입력 처리
     processed_text, A_df = process_user_input_raw(user_text, user_feats)
@@ -425,43 +355,27 @@ def generate_recommendations_contrast(user_text, user_feats, lr_model, sbert_mod
     return churn_prob
 
 def load_resources():
-    print("📦 리소스 로딩 중...")
-    # 경로 설정 (환경에 맞게 수정하세요)
     LR_PATH = 'data/processed/lr_model.joblib'
     TEXT_PATH = 'data/processed/telco_narrative_corpus.csv'
     CLUSTER_PATH = 'data/processed/telco_cleaned_data.csv'
     EMBED_PATH = 'data/processed/corpus_embeddings.joblib'
 
     # 1. 모델 로드
-    if os.path.exists(LR_PATH):
-        lr_model = joblib.load(LR_PATH)
-    else:
-        print("❌ [오류] 모델 파일(lr_model.joblib)이 없습니다!")
-        return None, None, None, None, None
+    lr_model = joblib.load(LR_PATH)
 
     # 2. 데이터 로드
     df_text = pd.read_csv(TEXT_PATH)
     df_cluster = pd.read_csv(CLUSTER_PATH)
     sbert = SentenceTransformer('jhgan/ko-sroberta-multitask')
 
-    if os.path.exists(EMBED_PATH):
-        print("  - 저장된 임베딩 로드 중...")
-        corpus_emb = joblib.load(EMBED_PATH)
-    else:
-        print("  - ⚠️ 저장된 임베딩 파일이 없습니다! (make_embedding.py 먼저 실행 권장)")
-        print("  - (비상) 즉석 생성 중...")
-        corpus_emb = sbert.encode(df_text['text'].fillna("").tolist(), normalize_embeddings=True)
+    corpus_emb = joblib.load(EMBED_PATH)
     
-    print("✅ 로드 완료.")
     return lr_model, sbert, corpus_emb, df_text, df_cluster
 
 
 if __name__ == "__main__":
 
     df = pd.read_csv("data/processed/telco_cleaned_data.csv", encoding="utf-8")
-    df = generate_recommendations(df)
-
-    print(df[['CustomerId', 'cluster_name', 'RecommendedServices']].head())
 
     try:
         # 1. 리소스 로드 (한 번만 수행)
@@ -493,6 +407,6 @@ if __name__ == "__main__":
             )
 
     except Exception as e:
-        print(f"❌ 실행 중 오류 발생: {e}")
+        print(f"실행 중 오류 발생: {e}")
         import traceback
         traceback.print_exc()
