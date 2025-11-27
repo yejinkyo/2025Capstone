@@ -1,157 +1,133 @@
 import pandas as pd
-import numpy as np
 import shap
-from sklearn.preprocessing import LabelEncoder, OneHotEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.linear_model import LogisticRegression
 
 # =====================
-# 1. 데이터 전처리
+# 1. 모델 학습 및 준비 (초기화)
 # =====================
-def preprocess_telco(df):
-    df = df.copy()
+def init_shap_model(df_path):
+    df = pd.read_csv(df_path)
 
-    # TotalCharges: 숫자로 변환
+    # 전처리
     df["Total Charges"] = pd.to_numeric(df["Total Charges"], errors="coerce")
     df = df.dropna(subset=["Total Charges"])
-
-    target = "Churn Value"
-    y = df[target]
-
-    # 제외하지 않을 feature 목록
+    
+    # Feature 정의
     service_features = [
-        "Online Security",
-        "Online Backup",
-        "Device Protection",
-        "Tech Support",
-        "Streaming TV",
-        "Streaming Movies",
-        "Phone Service",
-        "Multiple Lines",
-        "Paperless Billing",
-        "Internet Service",
-        "Contract",
-        "Payment Method",
+        "Online Security", "Online Backup", "Device Protection", "Tech Support",
+        "Streaming TV", "Streaming Movies", "Phone Service", "Multiple Lines",
+        "Paperless Billing", "Internet Service", "Contract", "Payment Method"
     ]
-
     numeric_features = ["Monthly Charges", "Total Charges", "Tenure Months"]
-
     categorical_features = service_features
+    
+    # 컬럼 존재 여부 확인 (에러 방지)
+    existing_cat = [c for c in categorical_features if c in df.columns]
+    existing_num = [c for c in numeric_features if c in df.columns]
+    
+    if not existing_cat or not existing_num:
+        print("[SHAP] 필수 칼럼 부족")
+        return None, df
 
-    X = df[categorical_features + numeric_features]
-
-    # 원핫 인코더
+    X = df[existing_cat + existing_num]
+    y = df["Churn Value"]
+    
+    # 파이프라인 구축
     preprocessor = ColumnTransformer(
         transformers=[
-            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features),
-            ("num", "passthrough", numeric_features),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), existing_cat),
+            ("num", "passthrough", existing_num),
         ]
     )
-
-    return X, y, preprocessor, categorical_features, numeric_features
-
-# ================
-# 2. 모델 학습
-# ================
-def train_churn_model(df):
-    X, y, preprocessor, cat_cols, num_cols = preprocess_telco(df)
-
-    model = Pipeline(
-        steps=[
-            ("preprocess", preprocessor),
-            ("clf", LogisticRegression(max_iter=300)),
-        ]
-    )
-
+    
+    model = Pipeline(steps=[
+        ("preprocess", preprocessor),
+        ("clf", LogisticRegression(max_iter=300)),
+    ])
+    
     model.fit(X, y)
-
-    return model, X, y, cat_cols, num_cols
-
-# ======================
-# 3. SHAP 계산
-# ======================
-def compute_shap_importance(model, X_sample):
-    explainer = shap.Explainer(model.named_steps["clf"])
-    shap_values = explainer(model.named_steps["preprocess"].transform(X_sample))
-    return shap_values
+    
+    return model, df
 
 # ============================
-# 4. WHAT-IF 기반 서비스 추천
+# 2. 특정 고객 분석 실행 함수
 # ============================
-def what_if_recommendations(model, customer_row, service_columns):
+def analyze_customer_shap(model, df, customer_id):
     """
-    고객이 특정 서비스를 구독했을 때 이탈 확률 변화 계산
+    특정 고객의 이탈 확률과 개선 추천 사항을 반환
     """
-    base = customer_row.copy()
-    base_pred = model.predict_proba(base.to_frame().T)[0][1]
+    if model is None or df is None:
+        return None
 
+    # [수정됨] ID 검색 로직 강화 (타입 불일치 해결)
+    # 1. 컬럼명 찾기
+    id_col = 'CustomerID'
+    if 'CustomerID' not in df.columns:
+        if 'customerID' in df.columns: id_col = 'customerID'
+        elif 'id' in df.columns: id_col = 'id'
+    
+    # 2. 강제 형변환 후 검색
+    try:
+        # 데이터프레임의 ID와 입력 ID 모두 문자열로 변환해서 공백 제거 후 비교
+        mask = df[id_col].astype(str).str.strip() == str(customer_id).strip()
+        if not mask.any():
+            print(f"[SHAP] ID 매칭 실패: '{customer_id}' (데이터 내 유사 ID 없음)")
+            return None
+            
+        row = df[mask].iloc[0]
+    except Exception as e:
+        print(f"[SHAP] 데이터 검색 중 오류: {e}")
+        return None
+
+    # 1. 현재 이탈 확률 계산
+    # 모델 학습 때 사용한 컬럼만 골라서 입력
+    features = model.named_steps['preprocess'].transformers_[0][2] + \
+               model.named_steps['preprocess'].transformers_[1][2]
+    
+    input_data = row[features].to_frame().T
+    base_pred = model.predict_proba(input_data)[0][1]
+
+    # 2. What-If 분석
+    service_cols = [
+        "Online Security", "Online Backup", "Device Protection", "Tech Support",
+        "Streaming TV", "Streaming Movies", "Paperless Billing", "Contract"
+    ]
+    
     rec_list = []
+    for col in service_cols:
+        if col not in df.columns: continue
 
-    for col in service_columns:
-        temp = base.copy()
+        # 현재 미사용(No)인 서비스만 타겟
+        val = str(row[col]).lower()
+        if val in ["no", "false", "0", "month-to-month"]:
+            temp = row.copy()
+            # 서비스별 긍정 값 설정
+            if col == "Contract": temp[col] = "One year"
+            else: temp[col] = "Yes" 
+            
+            # 예측
+            temp_input = temp[features].to_frame().T
+            new_pred = model.predict_proba(temp_input)[0][1]
+            delta = new_pred - base_pred 
+            
+            if delta < 0:
+                rec_list.append((col, delta))
 
-        # 서비스가 No/Off 인 경우만 변경
-        if temp[col] in ["No", "False", 0]:
-            temp[col] = "Yes"
-
-            new_pred = model.predict_proba(temp.to_frame().T)[0][1]
-            delta = new_pred - base_pred # 음수일수록 이탈 감소
-
-            rec_list.append((col, delta))
-
-    # 정렬: 가장 큰 이탈 방어 요인
     rec_list.sort(key=lambda x: x[1])
 
-    return rec_list, base_pred
+    if base_pred > 0.7:
+        pain_point = "높은 이탈 위험도"
+    else:
+        pain_point=""
 
-# ==========================
-# 5. 특정 고객에게 추천 생성
-# ==========================
-def recommend_for_customer(model, df, customer_id):
-    row = df[df["CustomerID"] == customer_id].iloc[0]
-
-    service_cols = [
-        "Online Security",
-        "Online Backup",
-        "Device Protection",
-        "Tech Support",
-        "Streaming TV",
-        "Streaming Movies",
-        "Phone Service",
-        "Multiple Lines",
-        "Paperless Billing",
-        "Internet Service",
-        "Contract",
-        "Payment Method",
-    ]
-
-    recs, pred = what_if_recommendations(model, row, service_cols)
-
-    print(f"\n고객 {customer_id}의 현재 이탈 확률: {pred:.3f}")
-    print("\n=== 추천 서비스 (이탈 감소 효과 높은 순) ===")
-    for service, delta in recs[:5]:
-        print(f"{service}: {(delta):.3f}")
-
-    return recs, pred
-
-
-if __name__ == '__main__':
-    # 1. 데이터 로드
-    df = pd.read_csv("data/raw/telco2.csv")
-
-    # 2. 모델 학습
-    model, X, y, cat_cols, num_cols = train_churn_model(df)
-
-    print(f"데이터 개수: {len(df)}")
-    print(f"서비스 컬럼 수: {len(cat_cols)}")
-
-    # 3. 특정 고객에게 서비스 추천 실행
-    sample_customer = df["CustomerID"].iloc[98]   # 첫 번째 고객
-
-    print("\n===============================")
-    print(f"고객 {sample_customer} 추천 분석")
-    print("===============================")
-
-    recommend_for_customer(model, df, sample_customer)
+    top_recs = [item[0] for item in rec_list[:3]]
+    
+    return {
+        "churn_prob": base_pred,
+        "pain_point": pain_point,
+        "detail": f"현재 이탈 위험 {base_pred:.1%}. {', '.join(top_recs)} 가입 시 위험 감소 예상.",
+        "top_recommendations": top_recs
+    }
