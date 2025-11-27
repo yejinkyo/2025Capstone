@@ -67,3 +67,7 @@ __results__/
 *.tmp
 *.bak
 *.swp
+
+# -----------------------------------------
+# Environment key
+.env
