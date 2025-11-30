@@ -348,7 +348,7 @@ if __name__ == "__main__":
 
         if lr_model is not None:
             # 2. 사용자 입력 시나리오 (테스트)
-            user_text_input = "요금제가 너무 비싸서 부담스러워요."
+            user_text_input = ""
             user_features_input = {
                 'CustomerID': 'NewUser',
                 'Gender': '남자',            
