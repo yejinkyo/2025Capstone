@@ -10,7 +10,7 @@ from src.model.rec_v2 import init_shap_model
 from src.model.rec_v1 import init_contrastive_resources
 from src.llm.msg_generator import generate_marketing_message
 
-# .env 파일 로드 (API 키가 있다면)
+# .env 파일 로드
 load_dotenv()
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
@@ -49,7 +49,7 @@ def analyze_customer(user_id, consult_text):
         churn_str = shap_res.get('churn_probability', '0%')
         churn_val = float(churn_str.replace('%', ''))
         
-        # 3. [UI] 이탈 스코어 HTML 생성
+        # 3. [UI] 이탈 스코어 HTML
         risk_badge = "위험 (Critical)" if churn_val >= 70 else "주의 (Warning)" if churn_val >= 50 else "안정 (Safe)"
         badge_class = "badge-critical" if churn_val >= 70 else "badge-warning" if churn_val >= 50 else "badge-safe"
         bar_color = "#ef4444" if churn_val >= 70 else "#f59e0b" if churn_val >= 50 else "#10b981"
@@ -67,10 +67,10 @@ def analyze_customer(user_id, consult_text):
         </div>
         """
 
-        # 4. [UI] AI 분석 원인 HTML 생성 (추천 서비스 리스트업)
+        # 4. [UI] AI 분석 원인 HTML
         factors_html = ""
         
-        # SHAP 추천 (방어 요인) -> 빨간색 배경
+        # SHAP 추천 (방어 요인)
         for idx, item in enumerate(shap_res.get('recommended_actions', [])):
             factors_html += f"""
             <div class="factor-item bg-red-50 text-red-700">
@@ -82,7 +82,7 @@ def analyze_customer(user_id, consult_text):
             </div>
             """
             
-        # 대조분석 추천 (추가 제안) -> 노란색 배경
+        # 대조분석 추천
         for idx, item in enumerate(contrast_res.get('recommended_services', [])):
             factors_html += f"""
             <div class="factor-item bg-yellow-50 text-yellow-700">
@@ -110,7 +110,7 @@ def analyze_customer(user_id, consult_text):
         </div>
         """
         
-        # 5. [UI] 프로필 업데이트 (실제 데이터 반영)
+        # 5. [UI] 프로필 업데이트 
         profile_html = f"""
         <div class="dashboard-card">
             <div class="profile-header">
@@ -321,7 +321,7 @@ with gr.Blocks(title="ChurnGuard AI") as demo:
         with gr.Column(scale=1):
             btn_analyze = gr.Button("🔍 분석 실행", variant="primary", size="lg")
 
-    # --- [상단] 대시보드 영역 (3개 컬럼) ---
+    # --- [상단] 대시보드 영역 ---
     with gr.Row(equal_height=True):
         
         # 1. 고객 정보 카드
