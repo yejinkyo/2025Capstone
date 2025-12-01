@@ -1,20 +1,20 @@
 import pandas as pd
 import numpy as np
 import joblib
-import torch
-import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import os
 import warnings
+import os
+from sentence_transformers import SentenceTransformer
 
 WEIGHT_STRUCT = 0.7
 WEIGHT_TEXT = 0.3
 
 # 파일 경로 (VS Code 프로젝트 폴더 구조 기준)
 LR_MODEL_PATH = 'data/processed/lr_model.joblib'             # 정형 모델 파일
-SENTIMENT_MODEL_DIR = 'data/processed/llm_sentiment_model'   # 감성 모델 폴더
+SENTIMENT_MODEL_PATH = 'data/processed/sentiment_model.joblib'   # 감성 모델 폴더
 
-#텔코 데이터 모델 학습에 사용된 컬럼 목록
+# ==============================================================================
+# 1. 설정: 모델 학습에 사용된 컬럼 목록
+# ==============================================================================
 MODEL_COLS = [
     # 기본 정보
     'Gender', 'Age', 'Married', 'Dependents', 'noDependents', 
@@ -47,6 +47,9 @@ VALUE_MAPPING = {
 BINARY_COLS = ['Married', 'PaperlessBilling', 'OnlineSecurity', 
                'OnlineBackup', 'TechSupport', 'UnlimitedData']
 
+# ==============================================================================
+# 2. 데이터 전처리 클래스
+# ==============================================================================
 class DataPreprocessor:
     @staticmethod
     def process(A_features_raw):
@@ -131,14 +134,14 @@ class DataPreprocessor:
         # DataFrame 변환 (반드시 학습 컬럼 순서 유지)
         return pd.DataFrame([feature_data], columns=MODEL_COLS)
     
-
-#하이브리드 예측 클래스 (LR + LLM)
+# ==============================================================================
+# 3. 하이브리드 예측 클래스 (수정됨: joblib 사용)
+# ==============================================================================
 class HybridChurnPredictor:
     def __init__(self):
         self.lr_model = None
-        self.tokenizer = None
         self.sentiment_model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.sbert = None
         self._load_models()
 
     def _load_models(self):
@@ -151,17 +154,17 @@ class HybridChurnPredictor:
         else:
             print(f"  ❌ 정형 모델 파일 없음: {LR_MODEL_PATH}")
 
-        # 2. 감성 모델 로드 (LLM)
-        if os.path.exists(SENTIMENT_MODEL_DIR):
+        # 2. 감성 모델 로드 (.joblib 파일)
+        if os.path.exists(SENTIMENT_MODEL_PATH):
             try:
-                self.tokenizer = AutoTokenizer.from_pretrained(SENTIMENT_MODEL_DIR)
-                self.sentiment_model = AutoModelForSequenceClassification.from_pretrained(SENTIMENT_MODEL_DIR)
-                self.sentiment_model.to(self.device)
-                print("  ✅ 감성 분석 모델(LLM) 로드 완료")
+                self.sentiment_model = joblib.load(SENTIMENT_MODEL_PATH)
+                # 감성 모델 입력용 S-BERT 로드 (필수!)
+                self.sbert = SentenceTransformer('jhgan/ko-sroberta-multitask')
+                print("  ✅ 감성 분석 모델(Joblib) 로드 완료")
             except Exception as e:
                 print(f"  ❌ 감성 모델 로드 실패: {e}")
         else:
-            print(f"  ⚠️ 감성 모델 폴더 없음: {SENTIMENT_MODEL_DIR}")
+            print(f"  ⚠️ 감성 모델 파일 없음: {SENTIMENT_MODEL_PATH}")
 
     def predict_proba(self, user_features: dict, user_text: str):
         """
@@ -171,27 +174,19 @@ class HybridChurnPredictor:
         prob_struct = 0.0
         if self.lr_model:
             try:
-                # 전처리 (Dictionary -> DataFrame)
                 df_input = DataPreprocessor.process(user_features)
-                # 확률 예측 (1: 이탈)
                 prob_struct = self.lr_model.predict_proba(df_input)[0][1]
             except Exception as e:
                 print(f"  ⚠️ 정형 예측 중 오류: {e}")
 
-        # 2. 감성 분석 예측
+        # 2. 감성 분석 예측 (S-BERT 벡터화 -> 로지스틱 예측)
         prob_text = 0.0
-        if self.sentiment_model and user_text:
+        if self.sentiment_model and self.sbert and user_text:
             try:
-                inputs = self.tokenizer(
-                    user_text, return_tensors="pt", truncation=True, max_length=128
-                ).to(self.device)
-                
-                with torch.no_grad():
-                    outputs = self.sentiment_model(**inputs)
-                    probs = F.softmax(outputs.logits, dim=-1)
-                    
-                # 1번 클래스(부정/이탈위험) 확률
-                prob_text = probs[0][1].item()
+                # 텍스트를 벡터로 변환
+                text_vec = self.sbert.encode([user_text])
+                # 예측 (1번 클래스: 부정/이탈위험)
+                prob_text = self.sentiment_model.predict_proba(text_vec)[0][1]
             except Exception as e:
                 print(f"  ⚠️ 감성 분석 중 오류: {e}")
         
@@ -208,22 +203,19 @@ class HybridChurnPredictor:
 # 4. 실행 테스트
 # ==========================================
 if __name__ == "__main__":
-    # 예측기 초기화
     predictor = HybridChurnPredictor()
     
-    # 테스트 데이터
     test_text = "요금이 너무 비싸서 화가 납니다. 해지할래요."
     test_features = {
         'Gender': '남자', 
-        'Age': 24,  # -> AgeGroup 모두 0 (20대 Baseline)
-        'PaymentMethod': '계좌이체', # -> PaymentMethod 모두 0 (Baseline)
+        'Age': 24, 
+        'PaymentMethod': '계좌이체', 
         'Monthly_charge': 95000,
         'CustomerLTV': 5000,
         'ServiceDuration': 12,
         'OnlineSecurity': 'No'
     }
     
-    # 예측 실행
     final, p_struct, p_text = predictor.predict_proba(test_features, test_text)
     
     print("\n" + "="*40)
