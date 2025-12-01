@@ -69,5 +69,5 @@ __results__/
 *.swp
 
 # -----------------------------------------
-# Environment key
+# Environment files
 .env
