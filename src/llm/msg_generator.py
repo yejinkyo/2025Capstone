@@ -1,60 +1,43 @@
+# src/msg_generator.py
 import os
 from openai import OpenAI
-from prompts import SYSTEM_PROMPT, format_user_prompt
-import json
-from dotenv import load_dotenv
+# 같은 폴더 내 prompts.py에서 가져옴
+from src.llm.prompts import SYSTEM_PROMPT, format_user_prompt
 
-load_dotenv()
-
-# ===========================================
-# 1. 고객 분석 결과 데이터 조회
-# ===========================================
-def get_customer_analysis(user_id, data_path="data/user_analysis.json"):
-    """
-    JSON 파일에서 user id에 해당하는 분석 정보를 읽어 반환
-    """
-    with open(data_path, 'r', encoding='utf-8') as f:
-        all_data = json.load(f)
-
-    return all_data.get(str(user_id))
-
-# ===========================================
-# 2. GPT API 호출
-# ===========================================
-def generate_marketing_message(user_id, api_key):
+def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: str):
     """
     OpenAI API를 호출하여 마케팅 메세지 생성
+    Args:
+        analysis_json (dict): data_generator.py에서 생성한 분석 결과 JSON
+        consult_text (str): 유저 상담 텍스트
+        api_key (str): OpenAI API Key
     """
-    # 1. 데이터 조회 
-    data = get_customer_analysis(user_id)
-
-    # 프롬프트 텍스트 병합
-    user_prompt_text = format_user_prompt(data)
-
-    print(f"=== GPT 요청 ===")
-
-    # 3. OpenAI API 호출
-    client = OpenAI(api_key=api_key)
-
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt_text}
-        ],
-        temperature=0.7,
-        max_tokens=1000
-    )
     
-    return response.choices[0].message.content
+    if not api_key:
+        return "⚠️ OpenAI API Key가 입력되지 않았습니다. 설정 탭에서 키를 입력해주세요."
+    
+    if not analysis_json or "error" in analysis_json:
+        return "⚠️ 분석 데이터가 올바르지 않습니다. 먼저 [추천 로직 실행]을 완료해주세요."
 
+    try:
+        # 1. 프롬프트 생성
+        user_prompt_text = format_user_prompt(analysis_json, consult_text)
+        
+        # 2. OpenAI 클라이언트 초기화
+        client = OpenAI(api_key=api_key)
 
-if __name__ == '__main__':
-    MY_API_KEY = os.getenv("OPENAI_API_KEY")
+        # 3. API 호출
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo", # 혹은 gpt-4o
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt_text}
+            ],
+            temperature=0.7,
+            max_tokens=1500
+        )
+        
+        return response.choices[0].message.content
 
-    target_user_list = ["0280-XJGEX", "10002"]
-
-    for user_id in target_user_list:
-        result = generate_marketing_message(user_id, MY_API_KEY)
-
-        print(result)
+    except Exception as e:
+        return f"LLM 생성 중 오류 발생:\n{str(e)}"
