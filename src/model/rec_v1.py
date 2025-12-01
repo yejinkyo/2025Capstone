@@ -6,7 +6,7 @@ import os
 from typing import List, Dict, Any, Tuple
 
 # ======================================================================
-# 1. 상수 정의 (NUMERICAL_COLS 및 ResourcesTuple 재정의)
+# 1. 상수 정의
 # ======================================================================
 
 MODEL_FEATURE_LIST = [
@@ -22,8 +22,8 @@ MODEL_FEATURE_LIST = [
     'AgeGroup_60대', 'AgeGroup_70대', 'AgeGroup_80대'
 ]
 
-# 스케일링이 필요한 수치형 피처 목록 정의 (훈련 시 사용된 17개 피처)
-NUMERICAL_COLS = [
+# Scaler가 fit된 정확한 17개 컬럼 목록 (transform 대상)
+SCALE_COLS_FOR_TRANSFORM = [
     'Age', 'AvgDownloadGB', 'CustomerLTV', 'TotalExtraDataCharge',
     'AvgRoamCharge', 'TotalRoamCharge', 
     'noReferrals', 'noDependents', 'SatisScore', 'Tenure_month', 'Sum_charge', 'Monthly_charge', 'ServiceDuration',
@@ -37,45 +37,55 @@ VALUE_MAPPING = {
     '신용카드': '신용카드', '계좌이체': '계좌이체', '이체': '이체/메일확인', '메일확인': '이체/메일확인', '이체/메일확인': '이체/메일확인'
 }
 
-BINARY_COLS = ['Gender', 'Married', 'Dependents', 'Referrals', 'PaperlessBilling',
-               'OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData']
+BINARY_COLS = ['Married', 'PaperlessBilling', 'OnlineSecurity', 
+               'OnlineBackup', 'TechSupport', 'UnlimitedData']
 
-# ResourcesTuple: (lr_model, sbert, corpus_emb, df_text, df_cluster, scaler)
+# ResourcesTuple: (lr_model, sbert, corpus_emb, df_text, df_cluster, scaler) - 6개 요소
 ResourcesTuple = Tuple[Any, SentenceTransformer, np.ndarray, pd.DataFrame, pd.DataFrame, Any]
 
 # ======================================================================
-# 2. 리소스 로드 함수 (Scaler 로직 추가)
+# 2. 리소스 로드 함수 (6개 요소 반환)
 # ======================================================================
 
-def init_contrastive_resources() -> ResourcesTuple:
-    """대조 분석에 필요한 모든 리소스를 로드합니다."""
-    paths = {
-        'lr': 'data/processed/lr_model.joblib',
-        'scaler': 'data/processed/scaler.joblib', # Scaler 경로 추가
-        'emb': 'data/processed/corpus_embeddings.joblib',
-        'text': 'data/processed/telco_narrative_corpus.csv',
-        'cluster': 'data/processed/telco_cleaned_data.csv'
-    }
-    
+def init_contrastive_resources(paths: Dict[str, str]) -> ResourcesTuple:
+    """모든 리소스와 Scaler를 로드합니다."""
     print("📦 리소스 로딩 중...")
     try:
         lr_model = joblib.load(paths['lr'])
-        # Scaler 로드 추가
-        scaler = joblib.load(paths['scaler'])
         corpus_emb = joblib.load(paths['emb'])
         df_text = pd.read_csv(paths['text'])
         df_cluster = pd.read_csv(paths['cluster'])
         sbert = SentenceTransformer('jhgan/ko-sroberta-multitask')
+        
+        # 🚩 Scaler 로드 시도
+        scaler = None
+        if 'scaler' in paths and os.path.exists(paths['scaler']):
+            scaler = joblib.load(paths['scaler'])
+            print("✅ Scaler 객체 로드 완료.")
+        else:
+            # Scaler 파일이 없으면 오류 메시지 출력
+            print("❌ [경고] Scaler 파일이 없어 정확한 예측 불가능. Raw Data로 예측 시도합니다.")
+            
         print("✅ 리소스 로드 완료.")
-        # Scaler를 반환 튜플에 포함
+        # 6개 요소 반환
         return lr_model, sbert, corpus_emb, df_text, df_cluster, scaler
     except Exception as e:
         print(f"❌ [오류] 리소스 로드 실패: {e}")
-        # Scaler 포함하여 None 반환
         return None, None, None, None, None, None
 
+def load_resources():
+    """테스트 블록의 요구사항에 맞춰 init_contrastive_resources를 경로 없이 호출"""
+    RESOURCE_PATHS = {
+        'lr': 'data/processed/lr_model.joblib',
+        'emb': 'data/processed/corpus_embeddings.joblib',
+        'text': 'data/processed/telco_narrative_corpus.csv',
+        'cluster': 'data/processed/telco_cleaned_data.csv',
+        'scaler': 'data/processed/scaler.joblib' # Scaler 경로 추가
+    }
+    return init_contrastive_resources(RESOURCE_PATHS)
+
 # ======================================================================
-# 3. 전처리 및 예측 유틸리티 함수 (Scaler 로직 추가)
+# 3. 전처리 및 예측 유틸리티 함수
 # ======================================================================
 
 def get_customer_features_by_id(user_id: str, df_cluster: pd.DataFrame) -> Dict[str, Any]:
@@ -139,27 +149,25 @@ def process_user_input_to_df(A_features_raw: Dict[str, Any]) -> pd.DataFrame:
 
 def predict_churn_probability(model: Any, A_input_df: pd.DataFrame, scaler: Any) -> float:
     """모델을 사용해 이탈 확률을 예측합니다. (Scaler 적용)"""
+    if model is None: return 0.0
     
     A_input_scaled_df = A_input_df.copy()
 
     try:
-        # 1. 수치형 피처만 추출하여 스케일링 적용
-        cols_to_scale = [col for col in NUMERICAL_COLS if col in A_input_scaled_df.columns]
-        
-        if scaler is not None and cols_to_scale:
+        # Scaler가 있을 경우에만 변환 수행
+        if scaler is not None:
+            cols_to_scale = SCALE_COLS_FOR_TRANSFORM
             numerical_data = A_input_scaled_df[cols_to_scale]
-            # 학습 시 사용한 Scaler의 transform만 적용
             scaled_data = scaler.transform(numerical_data)
-            
-            # 2. 스케일링된 데이터로 교체
             A_input_scaled_df[cols_to_scale] = scaled_data
-
-        # 3. 모델 예측
+            
+        # 예측
         churn_prob = model.predict_proba(A_input_scaled_df)[:, 1][0]
         return float(churn_prob)
+            
     except Exception as e:
-        print(f"[경고] 모델 예측 중 오류 발생 (스케일링 포함): {e}. 기본값 0.5 반환.")
-        return 0.5
+        print(f"[경고] 모델 예측 중 오류 발생 (스케일링 문제): {e}. 0.0 반환.")
+        return 0.0 # 예측 실패 시 0.0% 반환
 
 
 def find_retained_neighbors(b_id: Any, df_cluster: pd.DataFrame) -> pd.DataFrame:
@@ -197,38 +205,41 @@ def find_most_similar_customer_B(A_consult_text: str, model: SentenceTransformer
     return b_id, float(sim_scores[b_index])
 
 # ======================================================================
-# 4. 대조 분석 실행 함수 (Scaler 로직 추가 및 결과 형식 수정)
+# 4. 대조 분석 실행 함수 (New User 피처 주입 로직 포함)
 # ======================================================================
 
-def perform_contrastive_analysis_for_user(user_id, consult_text, resources):
-    # Scaler를 포함한 6개 요소 언팩
-    lr_model, sbert, corpus_emb, df_text, df_cluster, scaler = resources
+def perform_contrastive_analysis_for_user(user_id, consult_text, resources, scaler, user_features_dict=None):
+    # 5개 요소 언팩
+    lr_model, sbert, corpus_emb, df_text, df_cluster = resources
     
-    churn_prob = 0.0
-    
-    fail_response = {"role_model_pattern": "분석 불가 (데이터 부족)", "insight": "데이터 부족"}
+    fail_response = {"role_model_pattern": "분석 불가 (데이터 부족)", "insight": "데이터 부족", "churn_probability": 0.0}
     if sbert is None: return fail_response
 
     try:
-        raw_features = get_customer_features_by_id(user_id, df_cluster)
+        # 1. 피처 데이터 준비: user_features_dict가 있으면 NewUser로 간주하고 피처를 사용
+        if user_features_dict:
+            raw_features = user_features_dict
+        else:
+            # 기존 고객의 경우 ID 기반 조회 시도
+            raw_features = get_customer_features_by_id(user_id, df_cluster)
+            
         if not raw_features:
-             return {"role_model_pattern": "분석 불가 (ID 오류)", "insight": "고객 ID 정보가 데이터에 없습니다."}
+             return {"role_model_pattern": "분석 불가 (ID 오류)", "insight": "고객 ID 정보가 데이터에 없습니다.", "churn_probability": 0.0}
              
         A_df = process_user_input_to_df(raw_features)
         
-        # **<--- 핵심 로직: 이탈 예측 및 조건 확인 (Scaler 전달하여 호출) --->**
-        churn_prob = predict_churn_probability(lr_model, A_df, scaler) # Scaler 전달
+        # 2. 이탈 예측 (Scaler 전달)
+        churn_prob = predict_churn_probability(lr_model, A_df, scaler) 
         
         if churn_prob <= 0.5:
             print(f"[알림] 예측 이탈 확률 ({churn_prob:.2%})이 50% 이하이므로 대조 분석을 생략합니다.")
             return {
                 "role_model_pattern": "저위험군",
-                "insight": "이탈 확률이 기준(50%) 이하입니다."
+                "insight": "이탈 확률이 기준(50%) 이하입니다.",
+                "churn_probability": float(f"{churn_prob:.4f}")
             }
-        # **<--- 핵심 로직 끝 --->**
-
-
-        # 1. 유사 고객(Role Model) 찾기 
+        
+        # 3. 유사 고객(Role Model) 찾기 
         if not consult_text: consult_text = "서비스 불만 및 해지 고민"
 
         target_emb = sbert.encode([consult_text], normalize_embeddings=True)
@@ -240,47 +251,42 @@ def perform_contrastive_analysis_for_user(user_id, consult_text, resources):
         for col_name in ['CustomerID', 'customerID', 'id', 'CustomerId']:
             if col_name in b_row.index: b_id = b_row[col_name]; break
         if b_id is None:
-            return {"role_model_pattern": "유사 사례 매칭 실패", "insight": "유사 텍스트를 찾았으나 ID 매칭 실패"}
+            return {"role_model_pattern": "유사 사례 매칭 실패", "insight": "유사 텍스트를 찾았으나 ID 매칭 실패", "churn_probability": float(f"{churn_prob:.4f}")}
 
-        # 2. 유사 군집 및 롤모델 찾기 
+        # 4. 유사 군집 및 롤모델 찾기 
         id_col_cluster = None
         for col in ['CustomerID', 'customerID', 'id', 'CustomerId']:
             if col in df_cluster.columns: id_col_cluster = col; break
         
         neighbors = find_retained_neighbors(b_id, df_cluster)
 
-        # 3. 🚩 차이점 분석 (수정된 추천 로직 유지)
+        # 5. 🚩 차이점 분석 (개선된 추천 로직)
         service_recommendations = []
         payment_recommendation = ""
-        target_services = ['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData', 'StreamingTV']
+        target_services = ['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData', 'PaperlessBilling']
         
-        my_row = df_cluster[df_cluster[id_col_cluster].astype(str) == str(user_id)]
         
-        if not my_row.empty:
-            # 3-1. 서비스 가입 추천 (나는 미가입 AND 이웃 중 최소 1명 이상 가입 시 추천)
+        if raw_features:
+            # 5-1. 서비스 가입 추천 (유사 그룹 50% 이상 사용, 나는 미가입)
             for col in target_services:
-                if col in my_row.columns and col in neighbors.columns:
-                    my_val = my_row[col].values[0]
-                    
-                    # 1. 나는 미가입 상태 (No/0/false/nan)
-                    if str(my_val).lower() in ['no', '0', 'false', 'nan']:
-                        # 2. 비이탈 유사 그룹의 평균 사용률 계산
+                my_val = raw_features.get(col, '미가입')
+                
+                if col in neighbors.columns:
+                    if str(my_val).lower() in ['no', '미가입', '0', 'false', 'nan']:
                         group_usage = neighbors[col].apply(lambda x: 1 if str(x).lower() in ['yes', '1', 'true'] else 0).mean()
-                        
-                        # 수정된 기준: 사용률이 0% 초과일 때 추천
-                        if group_usage > 0.0:
-                            service_recommendations.append(f"{col}")
+                        if group_usage >= 0.5: # 🚩 50% 기준 적용
+                            service_recommendations.append(f"서비스: {col}")
             
-            # 3-2. 결제 수단 변경 추천 (유사 그룹 최빈값 기준)
-            if 'PaymentMethod' in my_row.columns and 'PaymentMethod' in neighbors.columns:
-                my_payment = my_row['PaymentMethod'].values[0]
+            # 5-2. 결제 수단 변경 추천 (유사 그룹 최빈값 기준)
+            my_payment = raw_features.get('PaymentMethod', '계좌이체') 
+            if 'PaymentMethod' in neighbors.columns:
                 neighbor_mode = neighbors['PaymentMethod'].mode()
                 if not neighbor_mode.empty:
                     neighbor_preferred_payment = neighbor_mode[0]
                     if str(my_payment) != str(neighbor_preferred_payment):
-                        payment_recommendation = f"{neighbor_preferred_payment}"
+                        payment_recommendation = f"결제수단: '{neighbor_preferred_payment}'"
 
-        # 4. 결과 출력 문자열 조합
+        # 6. 결과 출력 문자열 조합
         recommendation_parts = []
         if service_recommendations:
             recommendation_parts.extend(service_recommendations)
@@ -291,52 +297,104 @@ def perform_contrastive_analysis_for_user(user_id, consult_text, resources):
 
         if not recommendations_str:
             return {
-                "role_model_pattern": "기본 요금제 유지",
-                "insight": "유사 고객들은 현재 상태에 만족하고 있습니다."
+                "role_model_pattern": "기존 요금제 사용",
+                "insight": "유사한 만족 고객들은 현재 고객(A)과 피처 차이가 거의 없습니다.",
+                "churn_probability": float(f"{churn_prob:.4f}")
             }
         
         return {
             "role_model_pattern": recommendations_str,
-            "insight": f"유사한 만족 고객들은 {recommendations_str} 등을 이용중입니다."
+            "insight": f"유사한 만족 고객들은 {recommendations_str} 등을 이용중입니다.",
+            "churn_probability": float(f"{churn_prob:.4f}")
         }
 
     except Exception as e:
         print(f"[대조분석] 로직 실행 중 에러: {e}")
-        return {"role_model_pattern": "분석 중 기술적 오류", "insight": str(e)}
+        return {"role_model_pattern": "분석 중 기술적 오류", "insight": str(e), "churn_probability": 0.0}
     
 
-# ======================================================================
-# 5. 테스트 실행 블록 (무작위 30명 테스트 및 결과 출력)
-# ======================================================================
+def generate_recommendations_contrast(user_text, user_feats, lr_model, sbert_model, corpus_embeddings, df_text, df_cluster):
+    """
+    NewUser 테스트를 위한 래퍼 함수: perform_contrastive_analysis_for_user의 시그니처에 맞게 데이터를 재구성하여 호출합니다.
+    """
+    # 5개 리소스를 perform_contrastive_analysis_for_user에 전달
+    resources = (lr_model, sbert_model, corpus_embeddings, df_text, df_cluster)
+    
+    # NewUser의 CustomerID를 추출 (ID는 분석 로직 내에서 필요)
+    user_id = user_feats.get('CustomerID', 'NewUser')
+
+    # Scaler 로드 시도 (Scaler는 리소스로드 시점에서는 로드되지 않았으므로 여기서 로드)
+    scaler_path = 'data/processed/scaler.joblib'
+    scaler = joblib.load(scaler_path) if os.path.exists(scaler_path) else None
+
+    # perform_contrastive_analysis_for_user 함수에 user_features_input 딕셔너리와 Scaler를 전달
+    result = perform_contrastive_analysis_for_user(user_id, user_text, resources, scaler=scaler, user_features_dict=user_feats)
+    
+    # 출력은 generate_recommendations_contrast 내부에서 상세하게 출력
+    print(f"--- 1. 입력 처리 완료: {user_text}")
+    print(f"--- 2. 이탈 예측 확률: {result.get('churn_probability', 0.0) * 100:.2f}%")
+    print("\n3. 분석 결과:")
+    print(f"  - Role Model Pattern: {result.get('role_model_pattern', '오류')}")
+    print(f"  - Insight: {result.get('insight', '분석 중 오류 발생')}")
+    
+    return result.get('churn_probability', 0.0)
+
+
 if __name__ == "__main__":
-    print("--- 대조 분석 모듈 테스트 시작 ---")
-
-    contrast_resources = init_contrastive_resources()
     
-    target_user = {
-    'CustomerId': 'Demo-User-001',
-    'Gender': '여성',
-    'Age': 34,
-    'Married': 'No',
-    'Dependents': 'No',
-    'Tenure_month': 12,           # 1년차 고객
-    'Monthly_charge': 75000,      # 비교적 높은 요금
-    'Sum_charge': 900000,
-    'OnlineSecurity': 'No',       # [기회] 보안 서비스 없음
-    'OnlineBackup': 'No',
-    'TechSupport': 'No',          # [기회] 기술 지원 없음
-    'UnlimitedData': 'Yes',
-    'PaperlessBilling': 'Yes',
-    'PaymentMethod': '신용카드',
-    'Device Protection': 'No'     # [기회] 기기 보호 없음
-}
-    user_consult_text = "요금이 좀 비싼 것 같고, 폰이 자주 고장나서 걱정이에요."
-    user_df_contrast = pd.DataFrame([target_user])
-
-    contrast_result = perform_contrastive_analysis_for_user(
-    user_id="C-10008",
-    consult_text=user_consult_text,
-    resources=contrast_resources
-)
+    # NOTE: df 로드는 리소스 로드 함수 내에서 수행되어야 하므로 제거했습니다.
     
-    print(contrast_result)
+    try:
+        # 1. 리소스 로드 (한 번만 수행)
+        # ⚠️ load_resources가 6개 요소를 반환하도록 수정되었으므로, 변수 목록을 6개로 늘립니다.
+        lr_model, sbert_model, corpus_embeddings, df_text, df_cluster, scaler_model = load_resources()
+
+        if lr_model is not None:
+            # 2. 사용자 입력 시나리오 (새로운 고객 피처 정의)
+            user_text_input = "요금제가 너무 비싸서 부담스러워요."
+            user_features_input = {
+                'CustomerID': 'NewUser_Example', # 임의의 ID
+                'Gender': '남자',              
+                'Age': 30,                     
+                'Married': 'No',
+                'Dependents': 'No',
+                'Referrals': 'No',
+                'PaperlessBilling': 'Yes',
+                'OnlineSecurity': '미가입',    # 추천 대상 서비스
+                'OnlineBackup': '미가입',
+                'TechSupport': '미가입',
+                'UnlimitedData': 'No',
+                'StreamingTV': '미가입',
+                'PaymentMethod': '신용카드',   
+                'AvgDownloadGB': 10.5,
+                'CustomerLTV': 5000,
+                'SatisScore': 3,
+                'TotalExtraDataCharge': 50,
+                'AvgRoamCharge': 10,
+                'TotalRoamCharge': 100,
+                'Tenure_month': 15,
+                'Sum_charge': 1500,
+                'Monthly_charge': 100,
+                'ServiceDuration': 10
+            }
+
+            print(f"--- 대조 분석 모듈 테스트 시작 (New User) ---")
+            print(f"상담 내용: {user_text_input}")
+            
+            # 3. 실행 (함수 호출)
+            result_prob = generate_recommendations_contrast(
+                user_text_input,
+                user_features_input,
+                lr_model,
+                sbert_model,
+                corpus_embeddings,
+                df_text,
+                df_cluster
+            )
+            
+            # 최종 결과는 generate_recommendations_contrast 내부에서 출력됨
+
+    except Exception as e:
+        print(f"❌ 실행 중 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()
