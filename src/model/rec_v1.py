@@ -310,50 +310,33 @@ def perform_contrastive_analysis_for_user(user_id, consult_text, resources):
 # ======================================================================
 if __name__ == "__main__":
     print("--- 대조 분석 모듈 테스트 시작 ---")
-    
-    # 1. 리소스 초기화 (내부에서 paths 정의 및 Scaler 로드)
-    resources = init_contrastive_resources() 
-    
-    # 리소스 로드 실패 시 종료
-    if any(r is None for r in resources):
-        print("\n⚠️ 리소스 로드 실패로 테스트를 중단합니다.")
-    else:
-        # df_cluster는 resources 튜플의 5번째 요소 (인덱스 4)
-        df_cluster = resources[4]
-        
-        id_col_cluster = 'CustomerID'
-        # ID 컬럼 이름 자동 찾기 
-        for col in ['CustomerID', 'customerID', 'id', 'CustomerId']:
-            if col in df_cluster.columns: id_col_cluster = col; break
-        
-        # 🚩 무작위 30명 ID 추출
-        if len(df_cluster) > 30:
-            test_user_ids = df_cluster[id_col_cluster].sample(n=30).astype(str).tolist()
-        elif len(df_cluster) > 0:
-            test_user_ids = df_cluster[id_col_cluster].astype(str).tolist()
-        else:
-            print("\n❌ 데이터프레임이 비어 있어 무작위 테스트를 실행할 수 없습니다.")
-            test_user_ids = []
 
-        print("\n" + "="*70)
-        print(f"🚩 무작위 {len(test_user_ids)}명 고객 ID 목록 테스트 시작 🚩")
-        print("="*70)
+    contrast_resources = init_contrastive_resources()
+    
+    target_user = {
+    'CustomerId': 'Demo-User-001',
+    'Gender': '여성',
+    'Age': 34,
+    'Married': 'No',
+    'Dependents': 'No',
+    'Tenure_month': 12,           # 1년차 고객
+    'Monthly_charge': 75000,      # 비교적 높은 요금
+    'Sum_charge': 900000,
+    'OnlineSecurity': 'No',       # [기회] 보안 서비스 없음
+    'OnlineBackup': 'No',
+    'TechSupport': 'No',          # [기회] 기술 지원 없음
+    'UnlimitedData': 'Yes',
+    'PaperlessBilling': 'Yes',
+    'PaymentMethod': '신용카드',
+    'Device Protection': 'No'     # [기회] 기기 보호 없음
+}
+    user_consult_text = "요금이 좀 비싼 것 같고, 폰이 자주 고장나서 걱정이에요."
+    user_df_contrast = pd.DataFrame([target_user])
 
-        # 2. 고정된 상담 내용 정의
-        test_text = "좀 싸고 빠른 요금제 없나요 저 대학생이라 돈이 없어요 깎아주세요."
-        
-        # 3. 반복문을 사용하여 각 고객 분석 실행
-        for i, user_id in enumerate(test_user_ids):
-            
-            # 함수 호출
-            result = perform_contrastive_analysis_for_user(user_id, test_text, resources)
-            
-            # 4. 결과 출력
-            print(f"\n[{i + 1}/{len(test_user_ids)}] User ID: {user_id}")
-            print(f"  - Role Model Pattern: {result.get('role_model_pattern', '오류')}")
-            print(f"  - Insight: {result.get('insight', '분석 중 오류 발생')}")
-            print("-" * 50)
-            
-        print("\n" + "="*70)
-        print("🚩 무작위 고객 ID 테스트 완료 🚩")
-        print("="*70)
+    contrast_result = perform_contrastive_analysis_for_user(
+    user_id="C-10008",
+    consult_text=user_consult_text,
+    resources=contrast_resources
+)
+    
+    print(contrast_result)
