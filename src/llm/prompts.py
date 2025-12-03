@@ -1,5 +1,49 @@
 # src/prompts.py
 
+#Rag_search
+import pandas as pd
+import os
+
+RAG_DATA_PATH = 'data/processed/Final_Mapped_Service_Plan.csv'
+def get_rag_info_by_category(recommended_categories):
+    """
+    추천된 카테고리 리스트를 받아, 매핑된 실제 서비스 정보를 텍스트로 반환합니다.
+    """
+    if not os.path.exists(RAG_DATA_PATH):
+        return "(상품 데이터베이스 파일을 찾을 수 없습니다.)"
+
+    try:
+        df_rag = pd.read_csv(RAG_DATA_PATH)
+    except:
+        return "(상품 데이터 로드 실패)"
+
+    rag_context = ""
+    
+    for category in recommended_categories:
+        # 해당 카테고리가 포함된 행 검색 (예: "Streaming TV"가 포함된 행)
+        # na=False는 결측치 제외
+        matches = df_rag[df_rag['카테고리'].astype(str).str.contains(category, na=False, regex=False)]
+        
+        if not matches.empty:
+            rag_context += f"\n🔥 [{category} 관련 추천 상품 (실제 혜택)]\n"
+            
+            # 상위 3개만 추출 (너무 길어짐 방지)
+            # (가격 정보가 있다면 더 좋겠지만, 현재 파일 구조상 서비스명+상세설명 활용)
+            for _, row in matches.head(3).iterrows():
+                service_name = row['서비스명']
+                price = row['요금']
+                # 상세설명은 너무 길면 100자로 자르고 줄바꿈 제거
+                details = str(row['상세설명'])[:100].replace("\n", " ")
+                
+                rag_context += f"   • {service_name} ({price}): {details}...\n"
+        else:
+            pass 
+
+    if not rag_context:
+        return "(해당 카테고리에 맞는 추천 상품을 찾지 못했습니다. 일반적인 혜택으로 제안하세요.)"
+        
+    return rag_context
+
 # ======================================
 # 1. System Prompt (페르소나 및 작성 원칙)
 # ======================================
@@ -42,6 +86,9 @@ def format_user_prompt(data: dict, consult_text: str = ""):
         
         shap_res = results.get('shap_analysis', {})
         contrast_res = results.get('contrastive_analysis', {})
+
+        # 2. ★ RAG 검색 실행 (핵심!) ★
+        rag_info_text = get_rag_info_by_category(contrast_res)
         
         # 1. 기본 정보 블록 구성
         base_info = f"""
@@ -55,6 +102,14 @@ def format_user_prompt(data: dict, consult_text: str = ""):
         - **추천 혜택 솔루션:** {', '.join(contrast_res.get('recommended_services', []))} 등
         - **제안 근거:** {contrast_res.get('insight_message', '유사 고객 성공 사례 기반')}
         """
+
+        #Rag 정보 블록
+        rag_block = f"""
+        [3] 추천 서비스 상세 정보 (LGU+ 실제 상품 DB)
+        **반드시 아래 정보를 바탕으로 구체적인 상품명과 가격/혜택을 언급하여 제안하세요.**
+        {rag_info_text}
+        """
+
         
         # 2. 지시사항 (수정 없음)
         instruction = f"""
@@ -87,6 +142,8 @@ def format_user_prompt(data: dict, consult_text: str = ""):
         아래 고객 데이터를 바탕으로 이탈 방어용 마케팅 문구를 작성해주세요.
         
         {base_info}
+
+        {rag_block}
         
         {instruction}
         
