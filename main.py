@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import time
 import pandas as pd
 import re
+import openai
 
 # ====================================================
 # 1. 로컬 모듈 임포트 및 전역 리소스 로딩
@@ -38,73 +39,112 @@ DF_RAG = pd.read_csv(RAG_DATA_PATH)
 # ==========================================
 
 def get_rag_info_by_category(recommended_categories):
-    """
-    추천 카테고리 리스트를 받아 실제 상품 정보를 검색하고,
-    1) UI 표시용 HTML과 
-    2) LLM 프롬프트용 텍스트를 반환합니다.
-    """
+    """추천 카테고리에 매칭되는 실제 상품 정보를 검색하여 HTML/텍스트로 반환"""
     if DF_RAG.empty or not recommended_categories:
         return "", ""
 
-    rag_html_parts = []
-    rag_text_parts = []
+    rag_html = ""
+    rag_text = ""
     
     for category in recommended_categories:
-        # 해당 카테고리가 포함된 상품 검색
+        # 해당 카테고리가 포함된 행 검색
         matches = DF_RAG[DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)]
         
         if not matches.empty:
             # HTML용 헤더
-            rag_html_parts.append(f"<div style='margin-top:8px; font-weight:bold; color:#4b5563;'>🔥 {category} 관련 상품</div>")
-            
+            rag_html += f"<div style='margin-bottom: 8px;'><strong>🔥 {category} 관련 상품</strong></div>"
             # 텍스트용 헤더
-            rag_text_parts.append(f"\n[{category} 관련 추천 상품]")
+            rag_text += f"\n[{category} 관련 추천 상품]\n"
             
             # 상위 2개만 추출
             for _, row in matches.head(2).iterrows():
                 name = row['서비스명']
                 price = row['요금']
-                # 상세설명은 너무 기니까 요약
-                desc = str(row['상세설명'])[:60].replace("\n", " ") + "..."
+                desc = str(row['상세설명'])[:60] + "..."
                 
-                # HTML 포맷 (UI 카드 안에 들어갈 내용)
-                rag_html_parts.append(f"""
-                <div style="font-size: 12px; border-left: 3px solid #6366f1; padding-left: 8px; margin-bottom: 6px; background: #f9fafb; padding: 6px; border-radius: 4px;">
+                # HTML 포맷 (UI 카드 안에 들어갈 내용 - 스타일 적용)
+                rag_html += f"""
+                <div style="font-size: 12px; color: #4b5563; margin-bottom: 4px; padding-left: 8px; border-left: 2px solid #6366f1; background: #f9fafb; padding: 6px; border-radius: 4px;">
                     <div style="font-weight:600; color:#1f2937;">{name}</div>
                     <div style="color:#6366f1; font-size: 11px;">{price}</div>
                     <div style="color:#6b7280; font-size: 10px;">{desc}</div>
                 </div>
-                """)
-                
+                """
                 # 텍스트 포맷 (LLM에게 줄 내용)
-                rag_text_parts.append(f"- 상품명: {name} ({price})\n  특징: {desc}")
+                rag_text += f"- {name} ({price}): {desc}\n"
+            
+            rag_html += "<br>"
 
-    rag_html = "".join(rag_html_parts)
-    rag_text = "\n".join(rag_text_parts)
-    
-    if not rag_html:
-        rag_html = "<div style='font-size:12px; color:#9ca3af;'>추천된 카테고리에 맞는 상품 정보가 없습니다.</div>"
-        
     return rag_html, rag_text
 
+import re
 
 def parse_generated_text(text):
-    """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
-    pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
+    """
+    LLM 출력을 버전별로 분리하여 순수한 텍스트 리스트로 반환하는 함수 (강화된 Regex)
+    """
+    # 분리할 패턴 정의 (버전 헤더를 찾아서 자름)
+    pattern = r"(?:^|\n)(?:\*\*|\[|#+\s)?(?:버전|옵션|Version|Option)\s?\d+.*?(?:\*\*|\]|:)?"
+    
+    # 텍스트 분리
     parts = re.split(pattern, text, flags=re.IGNORECASE)
-    options = [p.strip() for p in parts if p.strip()]
-    return options if options else [text]
+    
+    # 공백 제거 및 필터링
+    options = []
+    for p in parts:
+        clean_p = p.strip()
+        # 내용이 너무 짧은 경우(헤더만 남은 경우 등) 제외하고 추가
+        if len(clean_p) > 10: 
+            options.append(clean_p)
+    
+    # 만약 분리에 실패했다면(옵션이 1개도 안 나오면)
+    if not options:
+        # 비상 대책: "버전" 키워드가 포함된 줄을 기준으로 강제 분리 시도
+        if "버전" in text:
+             return [t.strip() for t in text.split("버전") if len(t.strip()) > 10]
+        return [text] # 그래도 안 되면 통째로 반환
+
+    return options
+
+def generate_short_suggestion(consult_text, rec_services, rag_info, api_key):
+    """대시보드용 짧은 AI 제안 생성 (LLM 호출)"""
+    if not api_key: return "API 키를 입력해주세요."
+
+    prompt = f"""
+    당신은 통신사 AI 어시스턴트입니다.
+    고객의 상담 내용과 추천 서비스 정보를 바탕으로, **가장 시급한 해결책을 한 문장으로 요약**해서 제안하세요.
+
+    [고객 상담] "{consult_text}"
+    [추천 서비스] {', '.join(rec_services)}
+    [실제 상품 정보] {rag_info}
+
+    [작성 규칙]
+    1. **한 문장(50자 이내)**으로 간결하게 작성하세요.
+    2. 고객의 불만(상담내용)을 해결하는 구체적인 상품명(실제 상품 정보 참고)을 언급하세요.
+    3. 이모지를 사용하여 눈에 띄게 만드세요.
+    """
+
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", 
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"AI 제안 생성 실패: {str(e)}"
 
 # ==========================================
 # 3. 분석 및 생성 함수
 # ==========================================
 
-def analyze_customer(user_id, consult_text, new_user_features_json):
+def analyze_customer(user_id, consult_text, new_user_features_json, api_key_input):
     """
     [분석 버튼] 클릭 시 실행. 신규 유저 JSON 입력 시 해당 피처로 분석을 시도함.
     """
     if not user_id:
-        return None, "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", gr.update(interactive=False)
+        return None, "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>","<div>ID 입력 필요</div>",gr.update(interactive=False)
 
     # 1. 신규 유저 피처 JSON 파싱
     user_features_input = None
@@ -130,7 +170,7 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
         
         if "error" in data:
             error_html = f"<div class='dashboard-card'><div class='empty-state text-red-700'>{data['error']}</div></div>"
-            return None, error_html, error_html, error_html, gr.update(interactive=False)
+            return None, error_html, error_html, error_html, error_html, gr.update(interactive=False)
 
         # 3. 데이터 추출: profile, shap_res, contrast_res
         profile = data.get('customer_profile', {})
@@ -145,6 +185,9 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
         
         # 나중에 문구 생성할 때 쓰기 위해 data 딕셔너리에 저장
         data['rag_context'] = rag_text_content
+
+        # LLM 짧은 제안 생성
+        ai_suggestion = generate_short_suggestion(consult_text, rec_cats, rag_text_content, api_key_input)
 
         # 이탈 확률 데이터 타입 처리
         churn_prob_val = contrast_res.get('churn_probability', 0.0)
@@ -174,7 +217,7 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
             </div>
         </div>
         """
-        
+
         # SHAP 추천 (방어 요인)
         risk_factors_html = ""
         shap_actions = shap_res.get('recommended_actions', [])
@@ -205,6 +248,19 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
                 </div>
             </div>
             """
+
+        # AI 제안 HTML 구성 (LLM 멘트 + RAG 상품 정보)
+        ai_proposal_html = f"""
+        <div class="card-content" style="height: 100%; background-color: #f0fdf4; border: 1px solid #bbf7d0;">
+            <div style="font-size: 14px; color: #15803d; margin-bottom: 12px; line-height: 1.5;">
+                🤖 <strong>AI의 한마디:</strong><br>{ai_suggestion}
+            </div>
+            <div style="background: white; padding: 8px; border-radius: 6px; border: 1px solid #e5e7eb;">
+                <div style="font-size: 12px; font-weight: bold; color: #4b5563; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px;">🎁 추천 상품 상세</div>
+                {rag_html_content if rag_html_content else "<div style='color:#9ca3af; font-size:11px;'>매칭된 상품 없음</div>"}
+            </div>
+        </div>
+        """
         
         analysis_html = f"""
         <div class="card-content">
@@ -225,9 +281,12 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
                 </div>
             </div>
 
+            <!-- 섹션 3: 실제 상품 제안 -->
             <div style="margin-top: 16px; padding: 10px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;">
                 <h4 style="color: #4b5563; font-size: 13px; margin-bottom: 8px;">🎁 LGU+ 실제 상품 제안</h4>
-                {rag_html_content}
+                <div class="factors-list" style="max-height: 140px; overflow-y: auto;">
+                    {ai_proposal_html}
+                </div>
             </div>
 
             <!-- 하단 인사이트 박스 -->
@@ -272,22 +331,31 @@ def parse_generated_text(text):
     # [버전 1], [버전 2] 또는 옵션 1, 옵션 2 등의 패턴으로 분리
     pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
     parts = re.split(pattern, text, flags=re.IGNORECASE)
-    # 빈 문자열 제거 및 공백 정리
-    options = [p.strip() for p in parts if p.strip()]
-    
+    options = []
+    for p in parts:
+        clean_p = p.strip()
+        if clean_p:
+            # 내용이 너무 짧은 경우(헤더만 남은 경우) 제외
+            if len(clean_p) > 10: 
+                # 각 옵션 앞에 구분을 위해 타이틀을 달아줄 수도 있음 (선택사항)
+                # 여기서는 깔끔하게 내용만 리스트에 담습니다.
+                options.append(clean_p)    
     if not options:
         return [text] 
     return options
 
-def generate_message_action(user_data_state, consult_text, api_key):
+def generate_message_action(user_data_state, consult_text, api_key, rag_info_text):
     """
     [문구 생성] 버튼 클릭 시 LLM 호출 -> 라디오 버튼 옵션으로 반환
     """
     if not user_data_state:
         return gr.update(visible=False, choices=[]), "먼저 분석을 실행해주세요."
+    
+    # 저장해둔 RAG 정보 꺼내기
+    rag_info_text = user_data_state.get('rag_context', "")
 
     # LLM 호출
-    full_message = generate_marketing_message(user_data_state, consult_text, api_key)
+    full_message = generate_marketing_message(user_data_state, consult_text, api_key, rag_info_text=rag_info_text)
     
     # 에러 체크
     if "오류 발생" in full_message or "API Key" in full_message:
@@ -414,12 +482,12 @@ with gr.Blocks() as demo:
                 """
             )
 
-        # 3. AI 분석 결과 카드
+        # 3. AI 맞춤 제안 & 상품
         with gr.Column(scale=1):
             ai_analysis_html = gr.HTML(
                 """
                 <div class="dashboard-card">
-                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>이탈 요인과 방어 방법을 확인하세요.</div>
+                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>AI 맞춤 제안 & 상품을 확인하세요.</div>
                 </div>
                 """
             )
