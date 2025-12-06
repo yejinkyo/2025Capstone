@@ -45,7 +45,7 @@ VALUE_MAPPING = {
 }
 
 BINARY_COLS = ['Married', 'PaperlessBilling', 'OnlineSecurity', 
-                'OnlineBackup', 'TechSupport', 'UnlimitedData']
+               'OnlineBackup', 'TechSupport', 'UnlimitedData']
 
 RESOURCE_PATHS = {
     'lr': LR_MODEL_PATH,
@@ -275,23 +275,33 @@ class ContrastiveAnalyzer:
 
             # 4. 유사 군집 및 롤모델 찾기 
             neighbors = find_retained_neighbors(b_id, self.df_cluster)
-
-            # 5. 차이점 분석 (제한 없는 모든 차이점 추천 로직)
+            
+            # 유사 고객 군집의 크기가 너무 작으면 분석 의미가 없으므로 체크
+            if neighbors.empty:
+                return {"role_model_pattern": "유사 만족 고객 없음", "insight": "유사한 이탈 미경험 고객을 찾을 수 없습니다.", "churn_probability": float(f"{churn_prob:.4f}")}
+            
+            # 5. 차이점 분석 (50% 이상만 사용하는 서비스 추천 로직으로 수정)
             service_recommendations = []
             payment_recommendation = ""
             target_services = ['OnlineSecurity', 'OnlineBackup', 'TechSupport', 'UnlimitedData', 'PaperlessBilling']
             
             
             if raw_features:
-                # 5-1. 서비스 가입 추천 (고객 A 미가입 & 유사 그룹 중 한 명이라도 가입)
+                num_neighbors = len(neighbors)
+                # 5-1. 서비스 가입 추천 (고객 A 미가입 & 유사 그룹 중 50% 이상 가입)
                 for col in target_services:
                     my_val = raw_features.get(col, '미가입')
                     
                     if col in neighbors.columns:
                         if str(my_val).lower() in ['no', '미가입', '0', 'false', 'nan']:
-                            # 유사 그룹 중 한 명이라도 가입했는지 확인
-                            has_neighbor_used = neighbors[col].apply(lambda x: str(x).lower() in ['yes', '1', 'true']).any()
-                            if has_neighbor_used: 
+                            # 유사 그룹 중 'Yes' 또는 '1'로 변환될 수 있는 값의 개수를 셉니다.
+                            # VALUE_MAPPING을 활용하여 'Yes'로 통일
+                            neighbor_use_count = neighbors[col].apply(
+                                lambda x: VALUE_MAPPING.get(str(x).strip().lower(), str(x).strip().lower())
+                            ).isin(['yes', '1']).sum()
+                            
+                            # 유사 그룹 중 50% 이상이 가입했는지 확인
+                            if neighbor_use_count / num_neighbors >= 0.5: 
                                 service_recommendations.append(f"{col}") 
 
                 # 5-2. 결제 수단 변경 추천 (고객 A와 다른 결제 수단이 유사 그룹에 등장하면 모두 추천)
@@ -302,8 +312,11 @@ class ContrastiveAnalyzer:
                     
                     for payment in neighbor_payments:
                         if payment != my_payment:
-                            payment_recommendation = f"{payment}" 
-                            break # 첫 번째 차이나는 결제 수단만 추천
+                            # 해당 결제 수단이 유사 그룹의 50% 이상인지 확인
+                            payment_count = (neighbors['PaymentMethod'].apply(lambda x: VALUE_MAPPING.get(str(x).strip(), str(x).strip())) == payment).sum()
+                            if payment_count / num_neighbors >= 0.5:
+                                payment_recommendation = f"{payment}" 
+                                break # 첫 번째 50% 이상인 결제 수단만 추천
 
             # 6. 결과 출력 문자열 조합
             recommendation_parts = []
@@ -340,14 +353,14 @@ class ContrastiveAnalyzer:
         print(f"--- 1. 입력 처리 완료: ID={user_id}, Text={user_text}")
         print(f"--- 2. 이탈 예측 확률: {result.get('churn_probability', 0.0) * 100:.2f}%")
         print("\n3. 분석 결과:")
-        print(f"    - Role Model Pattern: {result.get('role_model_pattern', '오류')}")
-        print(f"    - Insight: {result.get('insight', '분석 중 오류 발생')}")
+        print(f"    - Role Model Pattern: {result.get('role_model_pattern', '오류')}")
+        print(f"    - Insight: {result.get('insight', '분석 중 오류 발생')}")
         
         return result.get('churn_probability', 0.0)
     
 if __name__ == "__main__":
     print("=====================================================")
-    print("          이탈 예측 및 대조 분석 모듈 ")
+    print("             이탈 예측 및 대조 분석 모듈 ")
     print("=====================================================")
     
     # 1. 분석기 객체 생성
@@ -366,13 +379,13 @@ if __name__ == "__main__":
     "OnlineSecurity": "No",
     "OnlineBackup": "No",
     "TechSupport": "No",
-    "UnlimitedData": "Yes",
-    "PaperlessBilling": "Yes",
+    "UnlimitedData": "No",
+    "PaperlessBilling": "No",
     "PaymentMethod": "계좌이체",
     "Device Protection": "No",
     "Contract": "Month-to-Month",
     "StreamingTV": "No",
-    "ConsultText": "엥"
+    "ConsultText": "데이터 너무 느려요 딴거 추천해주세요 싼걸로요"
 }
 
     print("\n----------------------------------------------------")
