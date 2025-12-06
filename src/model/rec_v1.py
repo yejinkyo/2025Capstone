@@ -6,14 +6,12 @@ import os
 import warnings
 from typing import List, Dict, Any, Tuple
 
-# 경고 무시 설정 (주피터 노트북 환경에서 유용)
 warnings.filterwarnings('ignore')
 
 # ======================================================================
-# 1. 상수 정의
+# 1. 상수 정의 및 경로 지정
 # ======================================================================
 
-# 상수 정의 부분은 유지합니다.
 WEIGHT_STRUCT = 0.7
 WEIGHT_TEXT = 0.3
 LR_MODEL_PATH = 'data/processed/lr_model.joblib' # 정형 모델 파일
@@ -66,40 +64,19 @@ RESOURCE_PATHS = {
 class HybridChurnPredictor:
     """정형 데이터와 텍스트 감성 분석을 결합한 이탈 예측기"""
     def __init__(self, lr_path=LR_MODEL_PATH, sentiment_path=SENTIMENT_MODEL_PATH):
-        print("⚙️ HybridChurnPredictor 초기화 중...")
-        self.struct_model = None
-        self.sentiment_model = None
-        self.sbert = None
-        
-        # 1. 정형 모델(LR) 로드
-        try:
-            self.struct_model = joblib.load(lr_path)
-            # 들여쓰기 수정
-            print(f"    ✅ 정형 모델(LR) 로드 완료: {lr_path}")
-        except Exception as e:
-            # 들여쓰기 수정
-            print(f"    ❌ 정형 모델 로드 실패: {e}")
-            
-        # 2. 감성 모델 및 SBERT 로드
-        try:
-            self.sentiment_model = joblib.load(sentiment_path)
-            self.sbert = SentenceTransformer('jhgan/ko-sroberta-multitask')
-            # 들여쓰기 수정
-            print(f"    ✅ 감성 모델 & SBERT 로드 완료: {sentiment_path}")
-        except Exception as e:
-            self.sentiment_model = None
-            self.sbert = None
-            # 들여쓰기 수정
-            print(f"    ⚠️ 감성 모델 로드 실패: {e} (정형 데이터 예측만 수행)")
+        self.struct_model = joblib.load(lr_path)
+        self.sentiment_model = joblib.load(sentiment_path)
+        self.sbert = SentenceTransformer('jhgan/ko-sroberta-multitask')
+        print("HybridChurnPredictor 초기화 완료. 리소스 로드함.")
 
     def predict(self, struct_df: pd.DataFrame, user_text: str = None) -> Tuple[float, float, float]:
         if self.struct_model is None:
             return 0.0, 0.0, 0.0
 
-        # 1. 정형 데이터 예측 (로지스틱 예측)
+        # 1. 정형 데이터 예측
         prob_struct = self.struct_model.predict_proba(struct_df)[0][1]
 
-        # 2. 텍스트 감성 예측 (로지스틱 예측)
+        # 2. 텍스트 감성 예측
         prob_text = 0.0
         if self.sentiment_model and self.sbert and user_text:
             try:
@@ -107,7 +84,7 @@ class HybridChurnPredictor:
                 prob_text = self.sentiment_model.predict_proba(text_vec)[0][1]
             except Exception as e:
                 # 들여쓰기 수정
-                print(f"    ⚠️ 감성 분석 중 오류: {e}")
+                print(f"감성 분석 오류: {e}")
         
         # 3. 하이브리드 결합
         if not user_text or (self.sentiment_model is None):
@@ -118,10 +95,13 @@ class HybridChurnPredictor:
         return final_prob, prob_struct, prob_text
 
 # ======================================================================
-# 3. 전처리 및 예측 유틸리티 함수 (클래스 외부)
+# 3. 전처리 및 예측 함수
 # ======================================================================
 
 def get_customer_features_by_id(user_id: str, df_cluster: pd.DataFrame) -> Dict[str, Any]:
+    """
+    입력한 user_id의 피처를 반환하는 함수
+    """
     id_col_cluster = None
     for col in ['CustomerID', 'customerID', 'id', 'CustomerId']:
         if col in df_cluster.columns: id_col_cluster = col; break
@@ -136,7 +116,9 @@ def get_customer_features_by_id(user_id: str, df_cluster: pd.DataFrame) -> Dict[
 
 
 def process_user_input_to_df(A_features_raw: Dict[str, Any]) -> pd.DataFrame:
-    # 기존 process_user_input_to_df 함수 로직 (생략 없이 유지)
+    """
+    고객 정보 전처리하는 함수
+    """
     feature_data = {col: 0 for col in MODEL_FEATURE_LIST}
     for raw_key, raw_value in A_features_raw.items():
         clean_val = str(raw_value).strip()
@@ -179,6 +161,18 @@ def process_user_input_to_df(A_features_raw: Dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame([feature_data], columns=MODEL_FEATURE_LIST)
 
 def find_retained_neighbors(b_id: Any, df_cluster: pd.DataFrame) -> pd.DataFrame:
+    """
+    고객의 군집 내에서 이탈하지 않고 서비스를 계속 이용 중인 고객 찾는 함수
+
+    Params
+    --------
+    b_id: 이탈 위험 고객과 유사한 고객의 id
+    df_cluster
+
+    Returns
+    --------
+    neighbors: 이탈하지 않은 고객 집합
+    """
     id_col = 'CustomerID'
     for col in df_cluster.columns:
         if col.lower() in ['customerid', 'id']: id_col = col; break
@@ -218,38 +212,23 @@ class ContrastiveAnalyzer:
     """모든 리소스를 로드하고, user_id와 text만으로 분석을 수행하는 클래스"""
 
     def __init__(self, paths: Dict[str, str] = RESOURCE_PATHS):
-        print("📦 ContrastiveAnalyzer 리소스 로딩 중...")
-        try:
-            # 1. 대조 분석용 리소스
-            self.corpus_emb = joblib.load(paths['emb'])
-            self.df_text = pd.read_csv(paths['text'])
-            self.df_cluster = pd.read_csv(paths['cluster'])
-            self.sbert_contrast = SentenceTransformer('jhgan/ko-sroberta-multitask')
+        # 1. 대조 분석용 리소스
+        self.corpus_emb = joblib.load(paths['emb'])
+        self.df_text = pd.read_csv(paths['text'])
+        self.df_cluster = pd.read_csv(paths['cluster'])
+        self.sbert_contrast = SentenceTransformer('jhgan/ko-sroberta-multitask')
+        
+        # 2. 예측용 리소스
+        self.hybrid_predictor = HybridChurnPredictor(lr_path=paths['lr'], sentiment_path=paths['sentiment'])
+        self.scaler = joblib.load(paths['scaler'])
             
-            # 2. 예측용 리소스
-            self.hybrid_predictor = HybridChurnPredictor(lr_path=paths['lr'], sentiment_path=paths['sentiment'])
-            
-            # 3. Scaler
-            self.scaler = None
-            if 'scaler' in paths and os.path.exists(paths['scaler']):
-                self.scaler = joblib.load(paths['scaler'])
-                print("✅ Scaler 객체 로드 완료.")
-            else:
-                print("❌ [경고] Scaler 파일이 없어 정확한 예측 불가능.")
-                
-            print("✅ ContrastiveAnalyzer 초기화 완료.")
-        except Exception as e:
-            print(f"❌ [오류] ContrastiveAnalyzer 초기화 실패: {e}")
-            self.hybrid_predictor = None
+        print("ContrastiveAnalyzer 초기화 완료.")
 
     def analyze_user(self, user_id: str, consult_text: str, user_features_dict: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        주어진 user_id와 상담 텍스트를 기반으로 이탈 예측 및 대조 분석을 수행합니다.
-        user_features_dict는 신규 고객 분석(NewUser) 시에만 사용됩니다.
+        주어진 user_id와 상담 텍스트를 기반으로 이탈 예측 및 대조 분석을 수행한다.
+        user_features_dict는 신규 고객 분석(NewUser) 시에만 사용된다.
         """
-        fail_response = {"role_model_pattern": "분석 불가 (시스템 오류)", "insight": "모델 로딩 실패 또는 시스템 오류", "churn_probability": 0.0}
-        if self.hybrid_predictor is None: return fail_response
-
         try:
             # 1. 피처 데이터 준비: user_features_dict가 있으면 사용, 없으면 ID로 조회
             if user_features_dict:
@@ -279,7 +258,7 @@ class ContrastiveAnalyzer:
             churn_prob = final_prob
             
             if churn_prob <= 0.5:
-                print(f"[알림] 예측 이탈 확률 ({churn_prob:.2%})이 50% 이하이므로 대조 분석을 생략합니다.")
+                print(f"[대조 분석 생략]예측 이탈 확률 ({churn_prob:.2%})이 50% 이하이므로 대조 분석을 생략합니다.")
                 return {
                     "role_model_pattern": "저위험군",
                     "insight": f"이탈 확률이 기준(50%) 이하입니다. (정형:{prob_struct:.2%}, 텍스트:{prob_text:.2%})",
@@ -287,7 +266,7 @@ class ContrastiveAnalyzer:
                 }
             
             # 3. 유사 고객(Role Model) 찾기 
-            current_consult_text = consult_text if consult_text else "서비스 불만 및 해지 고민"
+            current_consult_text = consult_text if consult_text else None
 
             b_id, sim_score = find_most_similar_customer_B(current_consult_text, self.sbert_contrast, self.corpus_emb, self.df_text)
             
@@ -337,20 +316,21 @@ class ContrastiveAnalyzer:
 
             if not recommendations_str:
                 return {
-                    "role_model_pattern": "기존 요금제 사용",
-                    "insight": "유사한 만족 고객들은 현재 고객(A)과 피처 차이가 거의 없습니다.",
+                    "role_model_pattern": "추가 추천 서비스가 없습니다.",
+                    "insight": "유사한 만족 고객들은 현재 고객과 차이가 거의 없습니다. 이탈 위험 요인을 확인하세요. ",
                     "churn_probability": float(f"{churn_prob:.4f}")
                 }
-            
             return {
                 "role_model_pattern": recommendations_str,
-                "insight": f"유사한 만족 고객들은 {recommendations_str} 등을 이용중입니다. (정형:{prob_struct:.2%}, 텍스트:{prob_text:.2%})",
+                "insight": f"이 고객과 유사한 만족 고객들은 {recommendations_str} 등을 이용 중입니다. 이를 제안하면 이탈 위험 감소에 도움이 될 수 있습니다.",
+                "prob_struct": f"{prob_struct:.2%}",
+                "prob_text": f"{prob_text:.2%}",
                 "churn_probability": float(f"{churn_prob:.4f}")
             }
 
         except Exception as e:
             print(f"[대조분석] 로직 실행 중 에러: {e}")
-            return {"role_model_pattern": "분석 중 기술적 오류", "insight": str(e), "churn_probability": 0.0}
+            return {"role_model_pattern": "오류", "insight": str(e), "churn_probability": 0.0}
 
     def run_analysis(self, user_id: str, user_text: str, user_features_input: Dict[str, Any] = None):
         """테스트 래퍼 함수: user_id와 text만 입력받아 분석을 실행하고 결과를 출력"""
@@ -366,63 +346,46 @@ class ContrastiveAnalyzer:
         return result.get('churn_probability', 0.0)
     
 if __name__ == "__main__":
+    print("=====================================================")
+    print("          이탈 예측 및 대조 분석 모듈 ")
+    print("=====================================================")
     
-    # ⚠️ 중요: 이 코드를 실행하기 전에 모든 RESOURCE_PATHS의 파일이 존재하는지 확인해야 합니다.
+    # 1. 분석기 객체 생성
+    analyzer = ContrastiveAnalyzer()
     
-    try:
-        print("=====================================================")
-        print("          ✨ 이탈 예측 및 대조 분석 모듈 테스트 시작 ✨")
-        print("=====================================================")
-        
-        # 1. 분석기 인스턴스 생성 (모든 리소스는 여기서 로드됨)
-        analyzer = ContrastiveAnalyzer()
+    # 2. 테스트 유저
+    user_features_input = {
+    "CustomerID": "0001",
+    "Gender": "남자",
+    "Age": 30,
+    "Married": "Yes",
+    "Dependents": "No",
+    "Tenure_month": 1,
+    "Monthly_charge": 110.00,
+    "Sum_charge": 110.00,
+    "OnlineSecurity": "No",
+    "OnlineBackup": "No",
+    "TechSupport": "No",
+    "UnlimitedData": "Yes",
+    "PaperlessBilling": "Yes",
+    "PaymentMethod": "계좌이체",
+    "Device Protection": "No",
+    "Contract": "Month-to-Month",
+    "StreamingTV": "No",
+    "ConsultText": "엥"
+}
 
-        # 2. 사용자 입력 시나리오 정의 (신규 고객 예시)
-        user_text_input = "요금제가 너무 비싸고 느려서 해지하고 싶어요."
-        
-        # New User의 피처 (ID 기반 조회가 아닌, 직접 피처를 제공)
-        user_features_input = {
-            'CustomerID': 'NewUser_Example_9999', # 임의의 ID
-            'Gender': '남자', 
-            'Age': 30,  
-            'Married': 'Yes',
-            'Dependents': 'Yes',
-            'Referrals': 'No',
-            'PaperlessBilling': 'Yes',
-            'OnlineSecurity': '미가입',    # 추천 대상 후보
-            'OnlineBackup': '미가입',      # 추천 대상 후보
-            'TechSupport': '미가입',       # 추천 대상 후보
-            'UnlimitedData': 'No',         # 무제한 데이터 미가입
-            'StreamingTV': '미가입',
-            'PaymentMethod': '계좌이체',    # 결제 수단 추천 후보
-            'AvgDownloadGB': 5.5,
-            'CustomerLTV': 500,
-            'SatisScore': 2,
-            'TotalExtraDataCharge': 50,
-            'AvgRoamCharge': 10,
-            'TotalRoamCharge': 100,
-            'Tenure_month': 15,
-            'Sum_charge': 1500,
-            'Monthly_charge': 100,
-            'ServiceDuration': 10
-        }
-
-        print("\n----------------------------------------------------")
-        print(f"시나리오: 신규 고객 분석 (ID: {user_features_input['CustomerID']})")
-        print("----------------------------------------------------")
-        
-        # 3. 실행 (최소 인자 사용: user_id와 text, 그리고 신규 고객 피처)
-        result_prob = analyzer.run_analysis(
-            user_id=user_features_input['CustomerID'],
-            user_text=user_text_input,
-            user_features_input=user_features_input 
-        )
-        
-        print("\n=====================================================")
-        print(f"✨ 최종 예측 확률: {result_prob * 100:.2f}%")
-        print("=====================================================")
-
-    except Exception as e:
-        print(f"\n❌ 실행 중 치명적인 오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
+    print("\n----------------------------------------------------")
+    print(f"신규 고객 분석 (ID: {user_features_input['CustomerID']})")
+    print("----------------------------------------------------")
+    
+    # 4. 실행
+    result_prob = analyzer.run_analysis(
+        user_id=user_features_input['CustomerID'],
+        user_text=user_features_input['ConsultText'],
+        user_features_input=user_features_input 
+    )
+    
+    print("\n=====================================================")
+    print(f" 최종 예측 확률: {result_prob * 100:.2f}%")
+    print("=====================================================")

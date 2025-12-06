@@ -189,8 +189,7 @@ def analyze_customer_shap(model, df, user_id=None, custom_data=None):
 
     # 3. 결과 정리
     if not rec_list:
-        # 비어있다면, 강제로 약정과 Tech Support 추천
-        top_recs = ["Contract", "Tech Support"]
+        top_recs = []
         detail_msg = "이탈 위험이 매우 높습니다. 장기 약정 및 기술 지원 서비스 제안이 시급합니다."
     else:
         rec_list.sort(key=lambda x: x[1]) 
