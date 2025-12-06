@@ -30,8 +30,73 @@ shap_model, shap_df_origin = init_shap_model('data/raw/telco2.csv')
 GLOBAL_SHAP_RESOURCES = (shap_model, shap_df_origin)
 GLOBAL_ANALYZER_INSTANCE = ContrastiveAnalyzer()
 
+RAG_DATA_PATH = 'data/processed/Final_Mapped_Service_Plan.csv'
+DF_RAG = pd.read_csv(RAG_DATA_PATH)
+
 # ==========================================
 # 2. 분석 및 생성 함수
+# ==========================================
+
+def get_rag_info_by_category(recommended_categories):
+    """
+    추천 카테고리 리스트를 받아 실제 상품 정보를 검색하고,
+    1) UI 표시용 HTML과 
+    2) LLM 프롬프트용 텍스트를 반환합니다.
+    """
+    if DF_RAG.empty or not recommended_categories:
+        return "", ""
+
+    rag_html_parts = []
+    rag_text_parts = []
+    
+    for category in recommended_categories:
+        # 해당 카테고리가 포함된 상품 검색
+        matches = DF_RAG[DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)]
+        
+        if not matches.empty:
+            # HTML용 헤더
+            rag_html_parts.append(f"<div style='margin-top:8px; font-weight:bold; color:#4b5563;'>🔥 {category} 관련 상품</div>")
+            
+            # 텍스트용 헤더
+            rag_text_parts.append(f"\n[{category} 관련 추천 상품]")
+            
+            # 상위 2개만 추출
+            for _, row in matches.head(2).iterrows():
+                name = row['서비스명']
+                price = row['요금']
+                # 상세설명은 너무 기니까 요약
+                desc = str(row['상세설명'])[:60].replace("\n", " ") + "..."
+                
+                # HTML 포맷 (UI 카드 안에 들어갈 내용)
+                rag_html_parts.append(f"""
+                <div style="font-size: 12px; border-left: 3px solid #6366f1; padding-left: 8px; margin-bottom: 6px; background: #f9fafb; padding: 6px; border-radius: 4px;">
+                    <div style="font-weight:600; color:#1f2937;">{name}</div>
+                    <div style="color:#6366f1; font-size: 11px;">{price}</div>
+                    <div style="color:#6b7280; font-size: 10px;">{desc}</div>
+                </div>
+                """)
+                
+                # 텍스트 포맷 (LLM에게 줄 내용)
+                rag_text_parts.append(f"- 상품명: {name} ({price})\n  특징: {desc}")
+
+    rag_html = "".join(rag_html_parts)
+    rag_text = "\n".join(rag_text_parts)
+    
+    if not rag_html:
+        rag_html = "<div style='font-size:12px; color:#9ca3af;'>추천된 카테고리에 맞는 상품 정보가 없습니다.</div>"
+        
+    return rag_html, rag_text
+
+
+def parse_generated_text(text):
+    """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
+    pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
+    parts = re.split(pattern, text, flags=re.IGNORECASE)
+    options = [p.strip() for p in parts if p.strip()]
+    return options if options else [text]
+
+# ==========================================
+# 3. 분석 및 생성 함수
 # ==========================================
 
 def analyze_customer(user_id, consult_text, new_user_features_json):
@@ -72,6 +137,15 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
         shap_res = data.get('analysis_results', {}).get('shap_analysis', {})
         contrast_res = data.get('analysis_results', {}).get('contrastive_analysis', {})
         
+        # 4. RAG 정보 생성
+        rec_cats = contrast_res.get('recommended_services', [])
+
+        # 실제 상품 정보 검색
+        rag_html_content, rag_text_content = get_rag_info_by_category(rec_cats)
+        
+        # 나중에 문구 생성할 때 쓰기 위해 data 딕셔너리에 저장
+        data['rag_context'] = rag_text_content
+
         # 이탈 확률 데이터 타입 처리
         churn_prob_val = contrast_res.get('churn_probability', 0.0)
         if isinstance(churn_prob_val, str):
@@ -100,9 +174,6 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
             </div>
         </div>
         """
-
-        # 5. [UI: factors_html, analysis_html] SHAP, 대조분석 결과 
-        factors_html = ""
         
         # SHAP 추천 (방어 요인)
         risk_factors_html = ""
@@ -152,6 +223,11 @@ def analyze_customer(user_id, consult_text, new_user_features_json):
                 <div class="factors-list" style="max-height: 140px; overflow-y: auto;">
                     {opportunity_html}
                 </div>
+            </div>
+
+            <div style="margin-top: 16px; padding: 10px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;">
+                <h4 style="color: #4b5563; font-size: 13px; margin-bottom: 8px;">🎁 LGU+ 실제 상품 제안</h4>
+                {rag_html_content}
             </div>
 
             <!-- 하단 인사이트 박스 -->
@@ -251,6 +327,8 @@ def send_message_action(message_text):
         
     time.sleep(0.5)
     return f"메시지가 성공적으로 전송되었습니다!"
+
+
 
 # ==========================================
 # 4. Gradio UI 구성
