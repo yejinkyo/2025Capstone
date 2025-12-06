@@ -1,7 +1,5 @@
-# src/msg_generator.py
 import os
 from openai import OpenAI
-# 같은 폴더 내 prompts.py에서 가져옴
 from src.llm.prompts import SYSTEM_PROMPT, format_user_prompt
 
 def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: str):
@@ -12,9 +10,6 @@ def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: 
         consult_text (str): 유저 상담 텍스트
         api_key (str): OpenAI API Key
     """
-    
-    if not api_key:
-        return "⚠️ OpenAI API Key가 입력되지 않았습니다. 설정 탭에서 키를 입력해주세요."
     
     if not analysis_json or "error" in analysis_json:
         return "⚠️ 분석 데이터가 올바르지 않습니다. 먼저 [추천 로직 실행]을 완료해주세요."
@@ -28,7 +23,7 @@ def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: 
 
         # 3. API 호출
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo", # 혹은 gpt-4o
+            model="gpt-3.5-turbo", 
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt_text}

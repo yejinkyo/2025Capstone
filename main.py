@@ -3,54 +3,88 @@ import json
 import os
 from dotenv import load_dotenv
 import time
+import pandas as pd
+import re
 
-# 로컬 모듈 임포트
+# ====================================================
+# 1. 로컬 모듈 임포트 및 전역 리소스 로딩
+# ====================================================
+
 from src.data_generator import generate_analysis_result
-from src.model.rec_v2 import init_shap_model
-from src.model.rec_v1 import init_contrastive_resources
 from src.llm.msg_generator import generate_marketing_message
+from src.model.rec_v2 import init_shap_model
+from src.model.rec_v1 import ContrastiveAnalyzer
 
-# .env 파일 로드
+# css 스타일
+with open("src/style/main.css", "r", encoding="utf-8") as css:
+    css = css.read()
+
+# .env 파일 로드 및 API 키 설정
 load_dotenv()
 DEFAULT_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
-# ==========================================
-# 0. 리소스 초기화
-# ==========================================
-shap_resources = init_shap_model('data/raw/telco2.csv') 
-contrast_resources = init_contrastive_resources()
+# ----------------------------------------------------
+# 리소스 초기화
+# ----------------------------------------------------
+shap_model, shap_df_origin = init_shap_model('data/raw/telco2.csv')
+GLOBAL_SHAP_RESOURCES = (shap_model, shap_df_origin)
+GLOBAL_ANALYZER_INSTANCE = ContrastiveAnalyzer()
 
 # ==========================================
-# 1. 분석 및 생성 함수
+# 2. 분석 및 생성 함수
 # ==========================================
 
-def analyze_customer(user_id, consult_text):
+def analyze_customer(user_id, consult_text, new_user_features_json):
     """
-    [분석 버튼]
+    [분석 버튼] 클릭 시 실행. 신규 유저 JSON 입력 시 해당 피처로 분석을 시도함.
     """
     if not user_id:
-        return None, "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", gr.update(interactive=False)
+        return None, "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", "<div>ID를 입력해주세요</div>", gr.update(interactive=False)
+
+    # 1. 신규 유저 피처 JSON 파싱
+    user_features_input = None
+    if new_user_features_json and "{" in new_user_features_json:
+        try:
+            user_features_input = json.loads(new_user_features_json)
+            print(f"신규 유저 로드: ID {user_id}")
+        except json.JSONDecodeError as e:
+            error_html = f"<div class='dashboard-card'><div class='empty-state text-red-700'>JSON 파싱 오류: {e}</div></div>"
+            return None, error_html, error_html, error_html, gr.update(interactive=False)
 
     try:
-        # 1. 실제 분석 로직 호출
-        json_str = generate_analysis_result(user_id, consult_text, shap_resources, contrast_resources)
+        # 2. 실제 분석 로직 호출
+        json_str = generate_analysis_result(
+            user_id=user_id,
+            consult_text=consult_text,
+            shap_resources=GLOBAL_SHAP_RESOURCES,
+            analyzer_instance=GLOBAL_ANALYZER_INSTANCE,
+            user_features_input=user_features_input # 파싱된 신규 유저 피처 전달
+        )
+        
         data = json.loads(json_str)
         
         if "error" in data:
             error_html = f"<div class='dashboard-card'><div class='empty-state text-red-700'>{data['error']}</div></div>"
-            return None, error_html, error_html, gr.update(interactive=False)
+            return None, error_html, error_html, error_html, gr.update(interactive=False)
 
-        # 2. 데이터 파싱
+        # 3. 데이터 추출: profile, shap_res, contrast_res
         profile = data.get('customer_profile', {})
         shap_res = data.get('analysis_results', {}).get('shap_analysis', {})
         contrast_res = data.get('analysis_results', {}).get('contrastive_analysis', {})
         
-        # 숫자 데이터 처리
-        churn_str = shap_res.get('churn_probability', '0%')
-        churn_val = float(churn_str.replace('%', ''))
-        
-        # 3. [UI] 이탈 스코어 HTML
-        risk_badge = "위험 (Critical)" if churn_val >= 70 else "주의 (Warning)" if churn_val >= 50 else "안정 (Safe)"
+        # 이탈 확률 데이터 타입 처리
+        churn_prob_val = contrast_res.get('churn_probability', 0.0)
+        if isinstance(churn_prob_val, str):
+             try:
+                 churn_val = float(churn_prob_val.replace('%', '').strip())
+             except ValueError:
+                 churn_val = 0.0
+        else:
+            churn_val = float(churn_prob_val)
+        churn_val = churn_val * 100
+
+        # 4. [UI: score_html] 이탈 확률
+        risk_badge = "위험" if churn_val >= 70 else "주의" if churn_val >= 50 else "안정"
         badge_class = "badge-critical" if churn_val >= 70 else "badge-warning" if churn_val >= 50 else "badge-safe"
         bar_color = "#ef4444" if churn_val >= 70 else "#f59e0b" if churn_val >= 50 else "#10b981"
         
@@ -67,50 +101,67 @@ def analyze_customer(user_id, consult_text):
         </div>
         """
 
-        # 4. [UI] AI 분석 원인 HTML
+        # 5. [UI: factors_html, analysis_html] SHAP, 대조분석 결과 
         factors_html = ""
         
         # SHAP 추천 (방어 요인)
-        for idx, item in enumerate(shap_res.get('recommended_actions', [])):
-            factors_html += f"""
-            <div class="factor-item bg-red-50 text-red-700">
-                <div class="factor-icon">🚨</div>
-                <div class="factor-text">
-                    <span class="factor-label">이탈 방어 {idx+1}</span>
-                    <span class="factor-desc">{item}</span>
+        risk_factors_html = ""
+        shap_actions = shap_res.get('recommended_actions', [])
+        if not shap_actions:
+            risk_factors_html = "<div class='text-gray-400 text-sm p-2'>위험 요인이 없습니다.</div>"
+        else:
+            for idx, item in enumerate(shap_actions):
+                risk_factors_html += f"""
+                <div class="factor-item bg-red-50 text-red-700" style="border-left: 3px solid #ef4444;">
+                    <div class="factor-icon">🚨</div>
+                    <div class="factor-text">
+                        <span class="factor-label">위험 요인 {idx+1}</span>
+                        <span class="factor-desc">{item}</span>
+                    </div>
                 </div>
-            </div>
-            """
+                """
             
         # 대조분석 추천
-        for idx, item in enumerate(contrast_res.get('recommended_services', [])):
-            factors_html += f"""
-            <div class="factor-item bg-yellow-50 text-yellow-700">
-                <div class="factor-icon">💡</div>
+        opportunity_html = ""
+        rec_services = contrast_res.get('recommended_services', [])
+        for idx, item in enumerate(rec_services):
+            opportunity_html += f"""
+            <div class="factor-item bg-blue-50 text-blue-700" style="border-left: 3px solid #3b82f6;">
+                <div class="factor-icon">💎</div>
                 <div class="factor-text">
-                    <span class="factor-label">추가 제안 {idx+1}</span>
+                    <span class="factor-label">추천 서비스 {idx+1}</span>
                     <span class="factor-desc">{item}</span>
                 </div>
             </div>
             """
         
-        # 최종 추천 문구 추출
-        final_recs = data.get('marketing_objective', {}).get('final_recommendations', [])
-        rec_text = ", ".join(final_recs[:2]) if final_recs else "맞춤 혜택"
-
         analysis_html = f"""
         <div class="card-content">
-            <div class="card-title">🟣 AI 분석 인사이트</div>
-            <div class="factors-list">
-                {factors_html if factors_html else "<div class='empty-state'>특이사항 없음</div>"}
+            
+            <!-- 섹션 1: 이탈 위험 요인 -->
+            <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 13px; color: #ef4444; margin-bottom: 8px; font-weight: 700;">📉 주요 이탈 요인</h4>
+                <div class="factors-list" style="max-height: 200px; overflow-y: auto;">
+                    {risk_factors_html}
+                </div>
             </div>
+
+            <!-- 섹션 2: 추천 서비스 -->
+            <div style="margin-bottom: 16px;">
+                <h4 style="font-size: 13px; color: #3b82f6; margin-bottom: 8px; font-weight: 700;">📈 다른 고객이 이용하는 서비스</h4>
+                <div class="factors-list" style="max-height: 140px; overflow-y: auto;">
+                    {opportunity_html}
+                </div>
+            </div>
+
+            <!-- 하단 인사이트 박스 -->
             <div class="recommendation-box">
-                 💡 <strong>AI 전략:</strong> {contrast_res.get('insight_message', '데이터 기반 맞춤 제안')}
+                💡 <strong>마케팅 전략:</strong> {contrast_res.get('insight_message')}
             </div>
         </div>
         """
         
-        # 5. [UI] 프로필 업데이트 
+        # 6. [UI: profile_html] 프로필 업데이트 
         profile_html = f"""
         <div class="dashboard-card">
             <div class="profile-header">
@@ -126,201 +177,137 @@ def analyze_customer(user_id, consult_text):
                 <span class="stat-label">월 요금</span>
                 <span class="stat-value">${profile.get('monthly_charge'):.2f}</span>
             </div>
+            <div class="stat-row">
+                <span class="stat-label">TV 스트리밍</span>
+                <span class="stat-value">{profile.get('streaming_tv')}</span>
+            </div>
         </div>
         """
 
         return data, score_html, analysis_html, profile_html, gr.update(interactive=True)
 
     except Exception as e:
-        err_msg = f"Error: {str(e)}"
+        err_msg = f"분석 오류: {str(e)}"
+        print(f"Analyze Customer Exception: {e}")
         return None, f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", gr.update(interactive=False)
+    
+def parse_generated_text(text):
+    """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
+    # [버전 1], [버전 2] 또는 옵션 1, 옵션 2 등의 패턴으로 분리
+    pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
+    parts = re.split(pattern, text, flags=re.IGNORECASE)
+    # 빈 문자열 제거 및 공백 정리
+    options = [p.strip() for p in parts if p.strip()]
+    
+    if not options:
+        return [text] 
+    return options
 
 def generate_message_action(user_data_state, consult_text, api_key):
     """
-    [문구 생성] 버튼 클릭 시 실행: LLM 호출
+    [문구 생성] 버튼 클릭 시 LLM 호출 -> 라디오 버튼 옵션으로 반환
     """
     if not user_data_state:
-        return "<div>먼저 분석을 실행해주세요.</div>", "분석 데이터 없음"
-    
-    if not api_key:
-        return "<div>API Key를 입력해주세요.</div>", "API Key 누락"
+        return gr.update(visible=False, choices=[]), "먼저 분석을 실행해주세요."
 
     # LLM 호출
-    message = generate_marketing_message(user_data_state, consult_text, api_key)
+    full_message = generate_marketing_message(user_data_state, consult_text, api_key)
     
     # 에러 체크
-    if "오류 발생" in message or "API Key" in message:
-         chat_bubble_html = f"""
-        <div class="phone-screen-content">
-            <div class="chat-bubble-ai" style="color: red;">
-                {message}
+    if "오류 발생" in full_message or "API Key" in full_message:
+        return gr.update(visible=False), f"오류: {full_message}"
+
+    # 메시지 파싱 (3가지 버전 분리)
+    candidates = parse_generated_text(full_message)
+    
+    # 라디오 버튼 업데이트 (보이게 설정, 옵션 채우기)
+    return gr.update(choices=candidates, value=None, visible=True), "마케팅 문구가 생성되었습니다. 클릭하여 전송하세요."
+
+def display_selected_message(selected_text):
+    """
+    [라디오 버튼 선택] 시 선택된 문구를 HTML 말풍선으로 표시
+    """
+    if not selected_text:
+        return "", "" # 선택 해제 시 빈 값
+
+    chat_bubble_html = f"""
+    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 12px; margin-top: 10px; border: 1px solid #e5e7eb;">
+        <div class="chat-bubble-ai" style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="chat-avatar" style="width: 36px; height: 36px; background: #4f46e5; color: white; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold;">AI</div>
+            <div class="chat-text" style="background: white; padding: 16px; border-radius: 0 16px 16px 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); line-height: 1.6; color: #374151; width: 100%;">
+                {selected_text.replace(chr(10), '<br>')}
             </div>
         </div>
-        """
-         return chat_bubble_html, message
-
-    # 스마트폰 화면 내 말풍선 HTML
-    chat_bubble_html = f"""
-    <div class="phone-screen-content">
-        <div class="chat-timestamp">오늘 오후 2:30</div>
-        <div class="chat-bubble-ai">
-            <div class="chat-profile">
-                <div class="chat-avatar">R</div>
-                <div class="chat-name">Retention AI</div>
-            </div>
-            <div class="chat-text">
-                {message.replace(chr(10), '<br>')}
-            </div>
+        <div style="text-align: right; margin-top: 8px;">
+            <span style="font-size: 11px; color: #9ca3af;">전송 미리보기 • 방금 전</span>
         </div>
     </div>
     """
-    
-    return chat_bubble_html, message 
+    return chat_bubble_html, selected_text # HTML과 텍스트(전송용) 반환
 
-def send_message_action():
+def send_message_action(message_text):
+    if not message_text:
+        return "전송할 메시지가 없습니다."
+        
     time.sleep(0.5)
-    return "메시지가 성공적으로 전송되었습니다!"
-
-
-# ==========================================
-# 2. CSS 스타일 (대시보드 & 폰 목업)
-# ==========================================
-css = """
-/* 폰트 및 기본 설정 */
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-body { font-family: 'Pretendard', sans-serif; background-color: #f3f4f6; }
-
-/* 카드 공통 스타일 */
-.dashboard-card {
-    background: white;
-    border-radius: 16px;
-    padding: 24px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    height: 100%;
-    min-height: 280px;
-    display: flex;
-    flex-direction: column;
-}
-.card-title {
-    font-size: 14px;
-    color: #6b7280;
-    font-weight: 600;
-    margin-bottom: 16px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-/* 1. 고객 프로필 카드 */
-.profile-header { display: flex; flex-direction: column; align-items: center; text-align: center; }
-.avatar { 
-    width: 80px; height: 80px; border-radius: 50%; background-color: #e5e7eb; 
-    margin-bottom: 12px; display: flex; align-items: center; justify-content: center; font-size: 32px;
-}
-.user-name { font-size: 24px; font-weight: 700; color: #111827; }
-.user-id { font-size: 14px; color: #9ca3af; margin-bottom: 20px; }
-.stat-row { display: flex; justify-content: space-between; width: 100%; margin-top: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-.stat-label { color: #6b7280; font-size: 14px; }
-.stat-value { color: #111827; font-weight: 600; font-size: 14px; }
-.badge-gold { color: #b45309; background-color: #fffbeb; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-
-/* 2. 스코어 카드 */
-.churn-score-container { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; }
-.churn-score-text { font-size: 48px; font-weight: 800; line-height: 1; }
-.churn-badge { padding: 4px 8px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
-.badge-critical { background-color: #fef2f2; color: #ef4444; }
-.badge-warning { background-color: #fffbeb; color: #f59e0b; }
-.badge-safe { background-color: #ecfdf5; color: #10b981; }
-
-.progress-bg { width: 100%; height: 12px; background-color: #f3f4f6; border-radius: 9999px; overflow: hidden; margin-bottom: 8px; }
-.progress-bar { height: 100%; border-radius: 9999px; transition: width 1s ease-in-out; }
-.sub-text { font-size: 12px; color: #9ca3af; text-align: right; }
-
-/* 3. AI 분석 카드 */
-.empty-state { 
-    display: flex; align-items: center; justify-content: center; height: 100%; color: #9ca3af; font-size: 14px; 
-    border: 2px dashed #e5e7eb; border-radius: 12px; padding: 20px; text-align: center;
-}
-.factors-list { flex: 1; overflow-y: auto; max-height: 180px; }
-.factor-item { display: flex; gap: 12px; padding: 12px; border-radius: 12px; margin-bottom: 8px; align-items: center; }
-.bg-red-50 { background-color: #fef2f2; border: 1px solid #fee2e2; }
-.text-red-700 { color: #b91c1c; }
-.bg-yellow-50 { background-color: #fffbeb; border: 1px solid #fef3c7; }
-.text-yellow-700 { color: #b45309; }
-.factor-text { display: flex; flex-direction: column; }
-.factor-label { font-size: 11px; opacity: 0.8; font-weight: 600; }
-.factor-desc { font-size: 14px; font-weight: 600; }
-.recommendation-box { margin-top: 10px; background: #eff6ff; color: #1e40af; padding: 12px; border-radius: 8px; font-size: 13px; line-height: 1.4; }
-
-/* 4. 스마트폰 목업 */
-.phone-frame {
-    width: 320px;
-    height: 580px;
-    background: #fff;
-    border: 12px solid #1f2937; /* 다크 그레이 프레임 */
-    border-radius: 40px;
-    margin: 0 auto;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-}
-.phone-notch {
-    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
-    width: 120px; height: 24px; background: #1f2937;
-    border-bottom-left-radius: 16px; border-bottom-right-radius: 16px; z-index: 10;
-}
-.phone-screen {
-    width: 100%; height: 100%; background: #f3f4f6;
-    display: flex; flex-direction: column; padding-top: 40px;
-}
-.phone-header {
-    padding: 0 16px 12px; border-bottom: 1px solid #e5e7eb; background: white;
-    font-size: 14px; font-weight: 600; color: #374151; text-align: center;
-}
-.phone-body {
-    flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column;
-}
-
-/* 채팅 말풍선 스타일 */
-.chat-timestamp { text-align: center; font-size: 11px; color: #9ca3af; margin-bottom: 16px; }
-.chat-bubble-ai { display: flex; gap: 10px; align-items: flex-start; animation: popIn 0.3s ease-out; }
-.chat-profile { display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.chat-avatar { width: 32px; height: 32px; background: #4f46e5; color: white; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
-.chat-name { font-size: 10px; color: #6b7280; }
-.chat-text {
-    background: white; padding: 12px 16px; border-radius: 0 16px 16px 16px;
-    font-size: 14px; color: #374151; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-    max-width: 220px;
-}
-
-@keyframes popIn {
-    0% { opacity: 0; transform: translateY(10px); }
-    100% { opacity: 1; transform: translateY(0); }
-}
-"""
+    return f"메시지가 성공적으로 전송되었습니다!"
 
 # ==========================================
-# 3. Gradio UI 구성
+# 4. Gradio UI 구성
 # ==========================================
+# 테스트 유저 데이터
+NEW_USER_DEFAULT_FEATURES = {
+    "CustomerId": "0001",
+    "Gender": "남자",
+    "Age": 30,
+    "Married": "Yes",
+    "Dependents": "No",
+    "Tenure_month": 1,
+    "Monthly_charge": 110.00,
+    "Sum_charge": 110.00,
+    "OnlineSecurity": "No",
+    "OnlineBackup": "No",
+    "TechSupport": "No",
+    "UnlimitedData": "Yes",
+    "PaperlessBilling": "Yes",
+    "PaymentMethod": "신용카드",
+    "Device Protection": "No",
+    "Contract": "Yes",
+    "StreamingTV": "No",
+    "ConsultText": "요금이 너무 비싸고 느려서 해지하고 싶어요."
+}
+NEW_USER_DEFAULT_JSON_STRING = json.dumps(NEW_USER_DEFAULT_FEATURES, indent=4)
 
-with gr.Blocks(title="ChurnGuard AI") as demo:
+
+with gr.Blocks() as demo:
     
     # 상태 저장소
     user_state = gr.State({})
     message_state = gr.State("")
+    api_key = gr.State(DEFAULT_API_KEY)
 
     # 헤더
     with gr.Row():
-        gr.Markdown("## 🛡️ 고객 분석 & 서비스 추천")
+        gr.Markdown("# 🛡️ 고객 이탈 방어 & 초개인화 마케팅 대시보드")
 
-        # --- 컨트롤 영역 ---
+        # 유저 피처 입력 영역
+    with gr.Accordion("유저 데이터", open=False):
+        input_feature_json = gr.Textbox(
+            label="신규 유저 피처 데이터 (JSON)",
+            value=NEW_USER_DEFAULT_JSON_STRING,
+            lines=20,
+            placeholder="여기에 고객의 모든 데이터를 JSON 형태로 입력하세요."
+        )
+
+    # --- 컨트롤 ---
     with gr.Row(variant="panel"):
         with gr.Column(scale=2):
-            input_user_id = gr.Textbox(label="Customer ID", value="Test-002", placeholder="고객 ID 입력")
+            input_user_id = gr.Textbox(label="고객 ID", value="0001", placeholder="고객 ID를 입력하세요.")
         with gr.Column(scale=2):
-            input_consult_text = gr.Textbox(label="최근 상담/고민 (VOC)", value="요금이 비싸서 해지를 고민중입니다.", placeholder="상담 내용 입력")
+            input_consult_text = gr.Textbox(label="최근 상담", value="요금이 너무 비싸고 느려서 해지하고 싶어요.", placeholder="상담 내용 입력")
         with gr.Column(scale=1):
-            btn_analyze = gr.Button("🔍 분석 실행", variant="primary", size="lg")
-
+            btn_analyze = gr.Button("🔍 분석", variant="primary", size="lg")
+        
     # --- [상단] 대시보드 영역 ---
     with gr.Row(equal_height=True):
         
@@ -331,8 +318,8 @@ with gr.Blocks(title="ChurnGuard AI") as demo:
                 <div class="dashboard-card">
                     <div class="profile-header">
                         <div class="avatar">👤</div>
-                        <div class="user-name">-</div>
-                        <input class="user-id">ID를 입력하세요</div>
+                        <div class="user-name">고객명</div>
+                        <div class="user-id">ID를 입력하세요.</div>
                     </div>
                 </div>
                 """
@@ -344,7 +331,7 @@ with gr.Blocks(title="ChurnGuard AI") as demo:
                 """
                 <div class="dashboard-card">
                     <div class="card-title">CHURN RISK SCORE</div>
-                    <div class="empty-state">분석 대기 중...</div>
+                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>이탈 확률을 확인하세요.</div>
                 </div>
                 """
             )
@@ -354,72 +341,70 @@ with gr.Blocks(title="ChurnGuard AI") as demo:
             ai_analysis_html = gr.HTML(
                 """
                 <div class="dashboard-card">
-                    <div class="card-title">🟣 AI 분석 이탈 원인</div>
-                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>원인을 파악하세요.</div>
+                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>이탈 요인과 방어 방법을 확인하세요.</div>
                 </div>
                 """
             )
-            
-    # API 키 입력 (숨김)
-    with gr.Accordion("⚙️ 설정 (API Key)", open=False):
-        input_api_key = gr.Textbox(label="OpenAI API Key", value=DEFAULT_API_KEY, type="password")
 
-    # --- [하단] 액션 영역 (폰 시뮬레이터) ---
-    gr.Markdown("### 📱 Marketing Action")
+    # --- [하단] 액션 영역 ---
+    gr.Markdown("# 📱 마케팅 문구 추천")
     
     with gr.Row():
-        # 왼쪽: 컨트롤 패널
+        # [왼쪽] 마케팅 문구 생성 버튼
         with gr.Column(scale=1):
-            gr.Markdown("#### 마케팅 실행 옵션")
-            gr.Info("AI 분석 결과를 바탕으로 개인화된 메시지를 생성합니다.")
-            
+            gr.Markdown("#### 1. 메시지 생성")
             btn_gen_msg = gr.Button("✨ 마케팅 문구 생성 (AI)", variant="primary")
-            btn_send_msg = gr.Button("🚀 전송 하기", variant="secondary", interactive=False)
-            
-            send_status = gr.Textbox(label="전송 상태", interactive=False)
 
-        # 오른쪽: 스마트폰 목업
+            # 생성된 문구 리스트
+            gr.Markdown("#### 2. 마케팅 문구 추천")
+            msg_options_radio = gr.Radio(choices=[], visible=True, interactive=True)
+            
+
+        # [오른쪽] 선택된 문구 전송
         with gr.Column(scale=2):
-            phone_display = gr.HTML(
-                """
-                <div class="phone-frame">
-                    <div class="phone-notch"></div>
-                    <div class="phone-screen">
-                        <div class="phone-header">Retention AI Message Preview</div>
-                        <div class="phone-body" id="phone-content">
-                            <div style="text-align: center; color: #9ca3af; margin-top: 50%;">미리보기 대기 중...</div>
-                        </div>
-                    </div>
-                </div>
-                """
-            )
+            gr.Markdown("#### 3. 메시지 전송")
+            message_display_html = gr.HTML(label="미리보기")
+
+            with gr.Row():
+                send_status = gr.Textbox(label="전송 상태", interactive=False, scale=2)
+                btn_send_msg = gr.Button("🚀 메시지 전송", variant="secondary", scale=1, interactive=False)
 
     # ==========================================
-    # 4. 이벤트 연결
+    # 5. 이벤트 연결
     # ==========================================
 
     # 1) 분석 버튼 클릭
     btn_analyze.click(
         fn=analyze_customer,
-        inputs=[input_user_id, input_consult_text],
+        inputs=[input_user_id, input_consult_text, input_feature_json],
         outputs=[user_state, churn_score_html, ai_analysis_html, user_profile_html, btn_send_msg]
     )
 
     # 2) 문구 생성 버튼 클릭
     btn_gen_msg.click(
         fn=generate_message_action,
-        inputs=[user_state, input_consult_text, input_api_key],
-        outputs=[phone_display, message_state]
-    ).then(
+        inputs=[user_state, input_consult_text, api_key],
+        outputs=[msg_options_radio, send_status]
+    )
+
+    # 3) 라디오 버튼 선택 시
+    msg_options_radio.change(
+        fn=display_selected_message,
+        inputs=[msg_options_radio],
+        outputs=[message_display_html, message_state]
+    ) .then(
         lambda: gr.update(interactive=True), None, [btn_send_msg]
     )
 
-    # 3) 전송 버튼 클릭
+    # 4) 메시지 전송 버튼 클릭
     btn_send_msg.click(
         fn=send_message_action,
-        inputs=None,
+        inputs=[message_state],
         outputs=[send_status]
+    ) .then(
+        lambda: gr.update(interactive=False), None, [btn_send_msg]
     )
+
 
 if __name__ == "__main__":
     demo.launch(theme=gr.themes.Soft(), css=css)

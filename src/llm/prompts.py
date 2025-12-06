@@ -1,6 +1,3 @@
-# src/prompts.py
-
-#Rag_search
 import pandas as pd
 import os
 
