@@ -2,13 +2,14 @@ import os
 from openai import OpenAI
 from src.llm.prompts import SYSTEM_PROMPT, format_user_prompt
 
-def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: str):
+def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: str, rag_info_text: str = ""):
     """
     OpenAI API를 호출하여 마케팅 메세지 생성
     Args:
         analysis_json (dict): data_generator.py에서 생성한 분석 결과 JSON
         consult_text (str): 유저 상담 텍스트
         api_key (str): OpenAI API Key
+        rag_info_text (str): RAG 검색 결과 텍스트
     """
     
     if not analysis_json or "error" in analysis_json:
@@ -16,7 +17,7 @@ def generate_marketing_message(analysis_json: dict, consult_text: str, api_key: 
 
     try:
         # 1. 프롬프트 생성
-        user_prompt_text = format_user_prompt(analysis_json, consult_text)
+        user_prompt_text = format_user_prompt(analysis_json, consult_text, rag_info_text)
         
         # 2. OpenAI 클라이언트 초기화
         client = OpenAI(api_key=api_key)

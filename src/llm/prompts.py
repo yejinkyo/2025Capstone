@@ -67,11 +67,12 @@ SYSTEM_PROMPT = """
 # =======================================
 # 2. User Prompt (데이터 주입 함수)
 # =======================================
-def format_user_prompt(data: dict, consult_text: str = ""):
+def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = ""):
     """
     유저 데이터를 입력받아 LLM에게 보낼 최종 질문 텍스트 생성
     data: data_generator.py에서 생성한 JSON 객체
     consult_text: 사용자가 입력한 상담 내용
+    rag_info_text: 외부(app.py)에서 검색해서 넘겨준 RAG 텍스트
     """
     if not data:
         return "데이터가 없습니다."
@@ -101,6 +102,10 @@ def format_user_prompt(data: dict, consult_text: str = ""):
         """
 
         #Rag 정보 블록
+        if not rag_info_text:
+             rec_cats = contrast_res.get('recommended_services', [])
+             rag_info_text = get_rag_info_by_category(rec_cats)
+             
         rag_block = f"""
         [3] 추천 서비스 상세 정보 (LGU+ 실제 상품 DB)
         **반드시 아래 정보를 바탕으로 구체적인 상품명과 가격/혜택을 언급하여 제안하세요.**
