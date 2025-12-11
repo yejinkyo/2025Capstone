@@ -39,66 +39,73 @@ DF_RAG = pd.read_csv(RAG_DATA_PATH)
 # ==========================================
 
 def get_rag_info_by_category(recommended_categories):
-    """추천 카테고리에 매칭되는 실제 상품 정보를 검색"""
+    """
+    분석된 카테고리(영어)에 해당하는 상품들을 검색한 후,
+    전체 후보 중 '상위 3개' 서비스만 최종 선별하여 반환합니다.
+    """
     
-    # 1. 데이터 로드 확인
+    # 1. 예외 처리
     if DF_RAG.empty:
-        print("❌ [RAG 오류] DF_RAG 데이터프레임이 비어있습니다.")
         return "", ""
-        
     if not recommended_categories:
-        print("⚠️ [RAG 알림] 추천 카테고리 리스트가 비어있습니다.")
         return "", ""
 
-    print(f"🔎 [RAG 검색 시작] 검색할 카테고리: {recommended_categories}")
+    print(f"🔎 [RAG 상품선별] 분석된 카테고리: {recommended_categories}")
 
+    # 2. 전체 후보 상품 모으기 (일단 다 찾음)
+    all_matched_rows = pd.DataFrame()
+
+    for category in recommended_categories:
+        # 매칭 로직 (소문자/공백 무시)
+        target_cat = category.lower().replace(" ", "")
+        
+        mask = DF_RAG['카테고리'].astype(str).str.lower().str.replace(" ", "").str.contains(target_cat, na=False)
+        matches = DF_RAG[mask]
+        
+        if not matches.empty:
+            # 검색된 상품들을 후보군에 추가
+            all_matched_rows = pd.concat([all_matched_rows, matches])
+    
+    # 3. 상품 선별 로직 (핵심)
     rag_html = ""
     rag_text = ""
     
-    found_count = 0
-
-    for category in recommended_categories:
-        # 해당 카테고리가 포함된 행 검색
-        try:
-            # 데이터프레임 컬럼명이 정확한지 확인 (공백 제거 등 안전장치)
-            mask = DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)
-            matches = DF_RAG[mask]
-        except KeyError:
-            print(f"❌ [RAG 오류] CSV 파일에 '카테고리' 컬럼이 없습니다. 현재 컬럼: {DF_RAG.columns}")
-            return "데이터 오류", "데이터 오류"
+    if not all_matched_rows.empty:
+        # (1) 중복 제거 (여러 카테고리에 걸친 상품이 있을 수 있음)
+        all_matched_rows = all_matched_rows.drop_duplicates(subset=['서비스명'])
         
-        if not matches.empty:
-            found_count += 1
-            # HTML 헤더
-            rag_html += f"<div style='margin-bottom: 8px;'><strong>🔥 {category} 관련 상품</strong></div>"
-            # 텍스트 헤더
-            rag_text += f"\n[{category} 관련 상품]\n"
-            
-            # 상위 2개 추출
-            for _, row in matches.head(2).iterrows():
-                name = row.get('서비스명', '상품명 없음')
-                price = row.get('요금', '가격 정보 없음')
-                desc = str(row.get('상세설명', ''))[:60] + "..."
-                
-                # HTML 추가
-                rag_html += f"""
-                <div style="font-size: 12px; color: #4b5563; margin-bottom: 4px; padding-left: 8px; border-left: 2px solid #6366f1; background: #f9fafb; padding: 6px; border-radius: 4px;">
-                    <div style="font-weight:600; color:#1f2937;">{name}</div>
-                    <div style="color:#6366f1; font-size: 11px;">{price}</div>
-                    <div style="color:#6b7280; font-size: 10px;">{desc}</div>
-                </div>
-                """
-                # 텍스트 추가 (LLM 전달용)
-                rag_text += f"- 상품명: {name}\n- 가격: {price}\n- 특징: {desc}\n"
-            
-            rag_html += "<br>"
-        else:
-            print(f"   -> '{category}'에 해당하는 상품을 CSV에서 못 찾음")
+        # (2) 딱 3개만 자르기 (CSV 상단에 있는 상품이 우선순위가 높다고 가정)
+        # 만약 '요금'이 비싼 순으로 하고 싶다면 여기서 .sort_values() 추가 가능
+        final_3_services = all_matched_rows.head(3)
+        
+        print(f"✅ [RAG 결과] 전체 {len(all_matched_rows)}개 후보 중 상위 3개 선별 완료")
 
-    print(f"✅ [RAG 검색 완료] 찾은 상품 수: {found_count}개")
-    
-    if not rag_text:
-        rag_text = "(검색된 추천 상품이 없습니다. 일반적인 VIP 혜택을 제안해주세요.)"
+        # (3) 최종 3개 상품에 대해서만 텍스트/HTML 생성
+        rag_html += "<div style='margin-bottom: 8px;'><strong>🎁 AI 추천 베스트 상품 (TOP 3)</strong></div>"
+        
+        for _, row in final_3_services.iterrows():
+            # 데이터 추출
+            cat_name = row.get('카테고리', '기타')
+            service_name = row.get('서비스명', '이름 없음')
+            price = row.get('요금', '가격 정보 없음')
+            desc = str(row.get('상세설명', ''))[:40] # 설명은 짧게
+
+            # 1) UI용 HTML 생성
+            rag_html += f"""
+            <div style="font-size: 12px; color: #4b5563; margin-bottom: 6px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff;">
+                <div style="font-size: 10px; color: #6366f1; font-weight: bold; margin-bottom: 2px;">{cat_name}</div>
+                <div style="font-weight:700; color:#1f2937; font-size: 13px;">{service_name}</div>
+                <div style="color:#059669; font-size: 12px; font-weight: 600;">{price}</div>
+                <div style="color:#9ca3af; font-size: 11px; margin-top: 2px;">{desc}...</div>
+            </div>
+            """
+            
+            # 2) LLM 전달용 텍스트 생성 (상품명 리스트)
+            rag_text += f"👉 {service_name} ({price})\n"
+            
+    else:
+        print("⚠️ [RAG 실패] 매칭되는 상품이 하나도 없습니다.")
+        rag_text = "(추천 상품 없음)"
 
     return rag_html, rag_text
 
