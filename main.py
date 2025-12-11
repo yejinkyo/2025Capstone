@@ -326,22 +326,41 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         print(f"Analyze Customer Exception: {e}")
         return None, f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", gr.update(interactive=False)
     
+import re
+
 def parse_generated_text(text):
     """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
-    # [버전 1], [버전 2] 또는 옵션 1, 옵션 2 등의 패턴으로 분리
-    pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
+    
+    # 정규식 패턴 수정: 줄바꿈 조건 (?:^|\n)을 제거하고, 구분자 패턴을 명확히 합니다.
+    # 텍스트 전체에서 '**[버전 N:' 형태를 찾습니다.
+    # **와 ]**를 기준으로 패턴을 명확히 정의합니다.
+    # ( ) 괄호로 패턴을 캡처 그룹으로 만들어, re.split 시 이 패턴도 결과에 포함되게 합니다.
+    pattern = r"(\*\*\[버전\s?\d+.*?\]\*\*)" 
+
+    # 캡처 그룹을 사용하여 분할하면, parts 리스트는 [잔여물, 패턴1, 내용1, 패턴2, 내용2, ...] 순이 됩니다.
     parts = re.split(pattern, text, flags=re.IGNORECASE)
     options = []
-    for p in parts:
-        clean_p = p.strip()
-        if clean_p:
-            # 내용이 너무 짧은 경우(헤더만 남은 경우) 제외
-            if len(clean_p) > 10: 
-                # 각 옵션 앞에 구분을 위해 타이틀을 달아줄 수도 있음 (선택사항)
-                # 여기서는 깔끔하게 내용만 리스트에 담습니다.
-                options.append(clean_p)    
-    if not options:
+    
+    # LLM이 출력한 전체 텍스트에서 버전 제목과 내용을 분리하여 options 리스트에 추가합니다.
+    for i in range(1, len(parts)):
+        # 홀수 인덱스 = 버전 제목 (패턴)
+        if i % 2 == 1:
+            header = parts[i].strip()
+        # 짝수 인덱스 = 버전 내용 (본문)
+        elif i % 2 == 0:
+            content = parts[i].strip()
+            
+            # 내용이 너무 짧은 경우 제외 (짧은 잔여물 필터링)
+            if header and content and len(content) > 10: 
+                # 헤더와 내용을 합쳐 하나의 옵션으로 만듭니다. (사용자가 어떤 버전인지 알 수 있도록)
+                # 옵션 텍스트에서 불필요한 마크다운 기호들을 제거하는 로직이 필요할 수 있습니다.
+                final_option = f"{header.strip('*[] ')} - {content.strip()}"
+                options.append(final_option) 
+
+    # 파싱이 성공하지 못하면 원본 텍스트를 반환합니다.
+    if len(options) < 2:
         return [text] 
+
     return options
 
 def generate_message_action(user_data_state, consult_text, api_key, rag_info_text):
