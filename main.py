@@ -39,30 +39,48 @@ DF_RAG = pd.read_csv(RAG_DATA_PATH)
 # ==========================================
 
 def get_rag_info_by_category(recommended_categories):
-    """추천 카테고리에 매칭되는 실제 상품 정보를 검색하여 HTML/텍스트로 반환"""
-    if DF_RAG.empty or not recommended_categories:
+    """추천 카테고리에 매칭되는 실제 상품 정보를 검색"""
+    
+    # 1. 데이터 로드 확인
+    if DF_RAG.empty:
+        print("❌ [RAG 오류] DF_RAG 데이터프레임이 비어있습니다.")
         return "", ""
+        
+    if not recommended_categories:
+        print("⚠️ [RAG 알림] 추천 카테고리 리스트가 비어있습니다.")
+        return "", ""
+
+    print(f"🔎 [RAG 검색 시작] 검색할 카테고리: {recommended_categories}")
 
     rag_html = ""
     rag_text = ""
     
+    found_count = 0
+
     for category in recommended_categories:
         # 해당 카테고리가 포함된 행 검색
-        matches = DF_RAG[DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)]
+        try:
+            # 데이터프레임 컬럼명이 정확한지 확인 (공백 제거 등 안전장치)
+            mask = DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)
+            matches = DF_RAG[mask]
+        except KeyError:
+            print(f"❌ [RAG 오류] CSV 파일에 '카테고리' 컬럼이 없습니다. 현재 컬럼: {DF_RAG.columns}")
+            return "데이터 오류", "데이터 오류"
         
         if not matches.empty:
-            # HTML용 헤더
+            found_count += 1
+            # HTML 헤더
             rag_html += f"<div style='margin-bottom: 8px;'><strong>🔥 {category} 관련 상품</strong></div>"
-            # 텍스트용 헤더
-            rag_text += f"\n[{category} 관련 추천 상품]\n"
+            # 텍스트 헤더
+            rag_text += f"\n[{category} 관련 상품]\n"
             
-            # 상위 2개만 추출
+            # 상위 2개 추출
             for _, row in matches.head(2).iterrows():
-                name = row['서비스명']
-                price = row['요금']
-                desc = str(row['상세설명'])[:60] + "..."
+                name = row.get('서비스명', '상품명 없음')
+                price = row.get('요금', '가격 정보 없음')
+                desc = str(row.get('상세설명', ''))[:60] + "..."
                 
-                # HTML 포맷 (UI 카드 안에 들어갈 내용 - 스타일 적용)
+                # HTML 추가
                 rag_html += f"""
                 <div style="font-size: 12px; color: #4b5563; margin-bottom: 4px; padding-left: 8px; border-left: 2px solid #6366f1; background: #f9fafb; padding: 6px; border-radius: 4px;">
                     <div style="font-weight:600; color:#1f2937;">{name}</div>
@@ -70,10 +88,17 @@ def get_rag_info_by_category(recommended_categories):
                     <div style="color:#6b7280; font-size: 10px;">{desc}</div>
                 </div>
                 """
-                # 텍스트 포맷 (LLM에게 줄 내용)
-                rag_text += f"- {name} ({price}): {desc}\n"
+                # 텍스트 추가 (LLM 전달용)
+                rag_text += f"- 상품명: {name}\n- 가격: {price}\n- 특징: {desc}\n"
             
             rag_html += "<br>"
+        else:
+            print(f"   -> '{category}'에 해당하는 상품을 CSV에서 못 찾음")
+
+    print(f"✅ [RAG 검색 완료] 찾은 상품 수: {found_count}개")
+    
+    if not rag_text:
+        rag_text = "(검색된 추천 상품이 없습니다. 일반적인 VIP 혜택을 제안해주세요.)"
 
     return rag_html, rag_text
 
@@ -157,15 +182,14 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
             return None, error_html, error_html, error_html, gr.update(interactive=False)
 
     try:
-        # 2. 실제 분석 로직 호출
+        # 1. 분석 로직 실행
         json_str = generate_analysis_result(
             user_id=user_id,
             consult_text=consult_text,
             shap_resources=GLOBAL_SHAP_RESOURCES,
             analyzer_instance=GLOBAL_ANALYZER_INSTANCE,
-            user_features_input=user_features_input # 파싱된 신규 유저 피처 전달
+            user_features_input=user_features_input 
         )
-        
         data = json.loads(json_str)
         
         if "error" in data:
@@ -363,38 +387,38 @@ def parse_generated_text(text):
 
     return options
 
-def generate_message_action(user_data_state, consult_text, api_key, rag_info_text):
+def generate_message_action(user_data_state, consult_text, api_key):
     """
-    [문구 생성] 버튼 클릭 시 LLM 호출 -> 라디오 버튼 옵션으로 반환
+    [문구 생성] 버튼 클릭 시 LLM 호출
     """
     if not user_data_state:
-        return gr.update(visible=False, choices=[]), "먼저 분석을 실행해주세요."
+        return gr.update(visible=False), "⚠️ 먼저 [분석]을 실행해주세요."
     
-    # 저장해둔 RAG 정보 꺼내기
+    # 1. State에서 RAG 정보 꺼내기
     rag_info_text = user_data_state.get('rag_context', "")
+    
+    # 디버깅: 실제로 넘어왔는지 확인
+    if not rag_info_text:
+        print("⚠️ [경고] 문구 생성 시 RAG 정보가 비어있습니다!")
+    else:
+        print(f"🚀 [LLM 전송] RAG 정보 포함됨 (길이: {len(rag_info_text)})")
 
-    # API Key 확인
+    # 2. API Key 처리
     real_api_key = api_key if api_key else os.getenv("OPENAI_API_KEY", "")
-    if not real_api_key:
-         return gr.update(visible=False), "⚠️ API Key가 설정되지 않았습니다."
-
-    # LLM 호출
+    
+    # 3. LLM 호출 (src/llm/msg_generator.py)
     full_message = generate_marketing_message(
         analysis_json=user_data_state, 
         consult_text=consult_text, 
         api_key=real_api_key, 
-        rag_info_text=rag_info_text
+        rag_info_text=rag_info_text  # <--- 여기서 확실히 넘겨줌
     )
     
-    # 에러 체크
-    if "오류 발생" in full_message or "API Key" in full_message:
-        return gr.update(visible=False), f"오류: {full_message}"
+    if "오류" in full_message or "API Key" in full_message:
+        return gr.update(visible=False), full_message
 
-    # 메시지 파싱 (3가지 버전 분리)
     candidates = parse_generated_text(full_message)
-    
-    # 라디오 버튼 업데이트 (보이게 설정, 옵션 채우기)
-    return gr.update(choices=candidates, value=None, visible=True), "마케팅 문구가 생성되었습니다. 클릭하여 전송하세요."
+    return gr.update(choices=candidates, value=None, visible=True), "✅ 마케팅 문구가 생성되었습니다."
 
 def display_selected_message(selected_text):
     """
@@ -551,7 +575,7 @@ with gr.Blocks() as demo:
     # 1) 분석 버튼 클릭
     btn_analyze.click(
         fn=analyze_customer,
-        inputs=[input_user_id, input_consult_text, input_feature_json],
+        inputs=[input_user_id, input_consult_text, input_feature_json, api_key],
         outputs=[user_state, churn_score_html, ai_analysis_html, user_profile_html, btn_send_msg]
     )
 
