@@ -209,7 +209,10 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         contrast_res = data.get('analysis_results', {}).get('contrastive_analysis', {})
         
         # 4. RAG 정보 생성
-        rec_cats = contrast_res.get('recommended_services','recommended_actions', [])
+        list_contrast = contrast_res.get('recommended_services', [])
+        list_shap = shap_res.get('recommended_actions', [])
+
+        rec_cats = list(set(list_contrast + list_shap))
 
         # 실제 상품 정보 검색
         rag_html_content, rag_text_content = get_rag_info_by_category(rec_cats)
