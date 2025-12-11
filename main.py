@@ -39,41 +39,73 @@ DF_RAG = pd.read_csv(RAG_DATA_PATH)
 # ==========================================
 
 def get_rag_info_by_category(recommended_categories):
-    """추천 카테고리에 매칭되는 실제 상품 정보를 검색하여 HTML/텍스트로 반환"""
-    if DF_RAG.empty or not recommended_categories:
+    """
+    분석된 카테고리(영어)에 해당하는 상품들을 검색한 후,
+    전체 후보 중 '상위 3개' 서비스만 최종 선별하여 반환합니다.
+    """
+    
+    # 1. 예외 처리
+    if DF_RAG.empty:
+        return "", ""
+    if not recommended_categories:
         return "", ""
 
+    print(f"🔎 [RAG 상품선별] 분석된 카테고리: {recommended_categories}")
+
+    # 2. 전체 후보 상품 모으기 (일단 다 찾음)
+    all_matched_rows = pd.DataFrame()
+
+    for category in recommended_categories:
+        # 매칭 로직 (소문자/공백 무시)
+        target_cat = category.lower().replace(" ", "")
+        
+        mask = DF_RAG['카테고리'].astype(str).str.lower().str.replace(" ", "").str.contains(target_cat, na=False)
+        matches = DF_RAG[mask]
+        
+        if not matches.empty:
+            # 검색된 상품들을 후보군에 추가
+            all_matched_rows = pd.concat([all_matched_rows, matches])
+    
+    # 3. 상품 선별 로직 (핵심)
     rag_html = ""
     rag_text = ""
     
-    for category in recommended_categories:
-        # 해당 카테고리가 포함된 행 검색
-        matches = DF_RAG[DF_RAG['카테고리'].astype(str).str.contains(category, na=False, regex=False)]
+    if not all_matched_rows.empty:
+        # (1) 중복 제거 (여러 카테고리에 걸친 상품이 있을 수 있음)
+        all_matched_rows = all_matched_rows.drop_duplicates(subset=['서비스명'])
         
-        if not matches.empty:
-            # HTML용 헤더
-            rag_html += f"<div style='margin-bottom: 8px;'><strong>🔥 {category} 관련 상품</strong></div>"
-            # 텍스트용 헤더
-            rag_text += f"\n[{category} 관련 추천 상품]\n"
+        # (2) 딱 3개만 자르기 (CSV 상단에 있는 상품이 우선순위가 높다고 가정)
+        # 만약 '요금'이 비싼 순으로 하고 싶다면 여기서 .sort_values() 추가 가능
+        final_3_services = all_matched_rows.head(3)
+        
+        print(f"✅ [RAG 결과] 전체 {len(all_matched_rows)}개 후보 중 상위 3개 선별 완료")
+
+        # (3) 최종 3개 상품에 대해서만 텍스트/HTML 생성
+        rag_html += "<div style='margin-bottom: 8px;'><strong>🎁 AI 추천 베스트 상품 (TOP 3)</strong></div>"
+        
+        for _, row in final_3_services.iterrows():
+            # 데이터 추출
+            cat_name = row.get('카테고리', '기타')
+            service_name = row.get('서비스명', '이름 없음')
+            price = row.get('요금', '가격 정보 없음')
+            desc = str(row.get('상세설명', ''))[:40] # 설명은 짧게
+
+            # 1) UI용 HTML 생성
+            rag_html += f"""
+            <div style="font-size: 12px; color: #4b5563; margin-bottom: 6px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff;">
+                <div style="font-size: 10px; color: #6366f1; font-weight: bold; margin-bottom: 2px;">{cat_name}</div>
+                <div style="font-weight:700; color:#1f2937; font-size: 13px;">{service_name}</div>
+                <div style="color:#059669; font-size: 12px; font-weight: 600;">{price}</div>
+                <div style="color:#9ca3af; font-size: 11px; margin-top: 2px;">{desc}...</div>
+            </div>
+            """
             
-            # 상위 2개만 추출
-            for _, row in matches.head(2).iterrows():
-                name = row['서비스명']
-                price = row['요금']
-                desc = str(row['상세설명'])[:60] + "..."
-                
-                # HTML 포맷 (UI 카드 안에 들어갈 내용 - 스타일 적용)
-                rag_html += f"""
-                <div style="font-size: 12px; color: #4b5563; margin-bottom: 4px; padding-left: 8px; border-left: 2px solid #6366f1; background: #f9fafb; padding: 6px; border-radius: 4px;">
-                    <div style="font-weight:600; color:#1f2937;">{name}</div>
-                    <div style="color:#6366f1; font-size: 11px;">{price}</div>
-                    <div style="color:#6b7280; font-size: 10px;">{desc}</div>
-                </div>
-                """
-                # 텍스트 포맷 (LLM에게 줄 내용)
-                rag_text += f"- {name} ({price}): {desc}\n"
+            # 2) LLM 전달용 텍스트 생성 (상품명 리스트)
+            rag_text += f"👉 {service_name} ({price})\n"
             
-            rag_html += "<br>"
+    else:
+        print("⚠️ [RAG 실패] 매칭되는 상품이 하나도 없습니다.")
+        rag_text = "(추천 상품 없음)"
 
     return rag_html, rag_text
 
@@ -157,15 +189,14 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
             return None, error_html, error_html, error_html, gr.update(interactive=False)
 
     try:
-        # 2. 실제 분석 로직 호출
+        # 1. 분석 로직 실행
         json_str = generate_analysis_result(
             user_id=user_id,
             consult_text=consult_text,
             shap_resources=GLOBAL_SHAP_RESOURCES,
             analyzer_instance=GLOBAL_ANALYZER_INSTANCE,
-            user_features_input=user_features_input # 파싱된 신규 유저 피처 전달
+            user_features_input=user_features_input 
         )
-        
         data = json.loads(json_str)
         
         if "error" in data:
@@ -326,46 +357,75 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         print(f"Analyze Customer Exception: {e}")
         return None, f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", f"<div>{err_msg}</div>", gr.update(interactive=False)
     
+import re
+
 def parse_generated_text(text):
     """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
-    # [버전 1], [버전 2] 또는 옵션 1, 옵션 2 등의 패턴으로 분리
-    pattern = r"(?:^|\n)(?:\[?(?:버전|옵션|Version|Option)\s?\d+.*?\]?)"
+    
+    # 정규식 패턴 수정: 줄바꿈 조건 (?:^|\n)을 제거하고, 구분자 패턴을 명확히 합니다.
+    # 텍스트 전체에서 '**[버전 N:' 형태를 찾습니다.
+    # **와 ]**를 기준으로 패턴을 명확히 정의합니다.
+    # ( ) 괄호로 패턴을 캡처 그룹으로 만들어, re.split 시 이 패턴도 결과에 포함되게 합니다.
+    pattern = r"(\*\*\[버전\s?\d+.*?\]\*\*)" 
+
+    # 캡처 그룹을 사용하여 분할하면, parts 리스트는 [잔여물, 패턴1, 내용1, 패턴2, 내용2, ...] 순이 됩니다.
     parts = re.split(pattern, text, flags=re.IGNORECASE)
     options = []
-    for p in parts:
-        clean_p = p.strip()
-        if clean_p:
-            # 내용이 너무 짧은 경우(헤더만 남은 경우) 제외
-            if len(clean_p) > 10: 
-                # 각 옵션 앞에 구분을 위해 타이틀을 달아줄 수도 있음 (선택사항)
-                # 여기서는 깔끔하게 내용만 리스트에 담습니다.
-                options.append(clean_p)    
-    if not options:
+    
+    # LLM이 출력한 전체 텍스트에서 버전 제목과 내용을 분리하여 options 리스트에 추가합니다.
+    for i in range(1, len(parts)):
+        # 홀수 인덱스 = 버전 제목 (패턴)
+        if i % 2 == 1:
+            header = parts[i].strip()
+        # 짝수 인덱스 = 버전 내용 (본문)
+        elif i % 2 == 0:
+            content = parts[i].strip()
+            
+            # 내용이 너무 짧은 경우 제외 (짧은 잔여물 필터링)
+            if header and content and len(content) > 10: 
+                # 헤더와 내용을 합쳐 하나의 옵션으로 만듭니다. (사용자가 어떤 버전인지 알 수 있도록)
+                # 옵션 텍스트에서 불필요한 마크다운 기호들을 제거하는 로직이 필요할 수 있습니다.
+                final_option = f"{header.strip('*[] ')} - {content.strip()}"
+                options.append(final_option) 
+
+    # 파싱이 성공하지 못하면 원본 텍스트를 반환합니다.
+    if len(options) < 2:
         return [text] 
+
     return options
 
-def generate_message_action(user_data_state, consult_text, api_key, rag_info_text):
+def generate_message_action(user_data_state, consult_text, api_key):
     """
-    [문구 생성] 버튼 클릭 시 LLM 호출 -> 라디오 버튼 옵션으로 반환
+    [문구 생성] 버튼 클릭 시 LLM 호출
     """
     if not user_data_state:
-        return gr.update(visible=False, choices=[]), "먼저 분석을 실행해주세요."
+        return gr.update(visible=False), "⚠️ 먼저 [분석]을 실행해주세요."
     
-    # 저장해둔 RAG 정보 꺼내기
+    # 1. State에서 RAG 정보 꺼내기
     rag_info_text = user_data_state.get('rag_context', "")
-
-    # LLM 호출
-    full_message = generate_marketing_message(user_data_state, consult_text, api_key, rag_info_text=rag_info_text)
     
-    # 에러 체크
-    if "오류 발생" in full_message or "API Key" in full_message:
-        return gr.update(visible=False), f"오류: {full_message}"
+    # 디버깅: 실제로 넘어왔는지 확인
+    if not rag_info_text:
+        print("⚠️ [경고] 문구 생성 시 RAG 정보가 비어있습니다!")
+    else:
+        print(f"🚀 [LLM 전송] RAG 정보 포함됨 (길이: {len(rag_info_text)})")
 
-    # 메시지 파싱 (3가지 버전 분리)
+    # 2. API Key 처리
+    real_api_key = api_key if api_key else os.getenv("OPENAI_API_KEY", "")
+    
+    # 3. LLM 호출 (src/llm/msg_generator.py)
+    full_message = generate_marketing_message(
+        analysis_json=user_data_state, 
+        consult_text=consult_text, 
+        api_key=real_api_key, 
+        rag_info_text=rag_info_text  # <--- 여기서 확실히 넘겨줌
+    )
+    
+    if "오류" in full_message or "API Key" in full_message:
+        return gr.update(visible=False), full_message
+
     candidates = parse_generated_text(full_message)
-    
-    # 라디오 버튼 업데이트 (보이게 설정, 옵션 채우기)
-    return gr.update(choices=candidates, value=None, visible=True), "마케팅 문구가 생성되었습니다. 클릭하여 전송하세요."
+    return gr.update(choices=candidates, value=None, visible=True), "✅ 마케팅 문구가 생성되었습니다."
 
 def display_selected_message(selected_text):
     """
@@ -522,7 +582,7 @@ with gr.Blocks() as demo:
     # 1) 분석 버튼 클릭
     btn_analyze.click(
         fn=analyze_customer,
-        inputs=[input_user_id, input_consult_text, input_feature_json],
+        inputs=[input_user_id, input_consult_text, input_feature_json, api_key],
         outputs=[user_state, churn_score_html, ai_analysis_html, user_profile_html, btn_send_msg]
     )
 
