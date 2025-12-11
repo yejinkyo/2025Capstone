@@ -373,8 +373,18 @@ def generate_message_action(user_data_state, consult_text, api_key, rag_info_tex
     # 저장해둔 RAG 정보 꺼내기
     rag_info_text = user_data_state.get('rag_context', "")
 
+    # API Key 확인
+    real_api_key = api_key if api_key else os.getenv("OPENAI_API_KEY", "")
+    if not real_api_key:
+         return gr.update(visible=False), "⚠️ API Key가 설정되지 않았습니다."
+
     # LLM 호출
-    full_message = generate_marketing_message(user_data_state, consult_text, api_key, rag_info_text=rag_info_text)
+    full_message = generate_marketing_message(
+        analysis_json=user_data_state, 
+        consult_text=consult_text, 
+        api_key=real_api_key, 
+        rag_info_text=rag_info_text
+    )
     
     # 에러 체크
     if "오류 발생" in full_message or "API Key" in full_message:
