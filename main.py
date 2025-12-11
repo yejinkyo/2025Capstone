@@ -38,74 +38,182 @@ DF_RAG = pd.read_csv(RAG_DATA_PATH)
 # 2. 분석 및 생성 함수
 # ==========================================
 
-def get_rag_info_by_category(recommended_categories):
+def get_rag_info_by_category(recommended_categories, user_features=None):
     """
-    분석된 카테고리(영어)에 해당하는 상품들을 검색한 후,
-    전체 후보 중 '상위 3개' 서비스만 최종 선별하여 반환합니다.
+    [일반화된 프로필 매칭 시스템]
+    사용자 데이터(JSON)가 어떻게 변하든, 해당 조건(나이, 가족, 소득수준 등)에 맞춰
+    자동으로 가중치를 부여하여 최적의 상품을 랭킹화합니다.
     """
     
     # 1. 예외 처리
-    if DF_RAG.empty:
-        return "", ""
-    if not recommended_categories:
-        return "", ""
+    if DF_RAG.empty: return "", ""
+    if not recommended_categories: return "", ""
 
-    print(f"🔎 [RAG 상품선별] 분석된 카테고리: {recommended_categories}")
+    # 유저 데이터 없으면 빈 딕셔너리로 시작
+    if not user_features: user_features = {}
 
-    # 2. 전체 후보 상품 모으기 (일단 다 찾음)
-    all_matched_rows = pd.DataFrame()
+    # -----------------------------------------------------------
+    # [Step 1] 동적 페르소나(Persona) 정의 (Generalization Logic)
+    # -----------------------------------------------------------
+    # 어떤 데이터가 들어오든 안전하게 파싱 (대소문자 무시, 문자열 처리)
+    def parse_bool(key):
+        val = str(user_features.get(key, "No")).lower()
+        return val in ["yes", "true", "1", "y"]
 
+    # 1. 인구통계 변수
+    try: age = int(user_features.get("Age", 30))
+    except: age = 30
+    
+    is_married = parse_bool("Married")
+    has_child = parse_bool("Dependents")
+    
+    # 2. 경제력 (ARPU) 판단
+    # 데이터셋($)과 한국 실정(원화)을 고려한 상대적 지표
+    try: 
+        bill = float(user_features.get("Monthly_charge", 0))
+    except: 
+        bill = 0
+    
+    # $80 이상이면 고가 요금제 유저로 간주 (기준점은 조정 가능)
+    is_high_spender = bill >= 80 
+    is_low_spender = bill <= 40
+
+    print(f"🔎 [프로필 일반화 분석] 나이:{age} | 기혼:{is_married} | 자녀:{has_child} | 고소득군:{is_high_spender}")
+
+    # -----------------------------------------------------------
+    # [Step 2] 상품 후보군 검색
+    # -----------------------------------------------------------
+    candidate_df = pd.DataFrame()
     for category in recommended_categories:
-        # 매칭 로직 (소문자/공백 무시)
         target_cat = category.lower().replace(" ", "")
-        
         mask = DF_RAG['카테고리'].astype(str).str.lower().str.replace(" ", "").str.contains(target_cat, na=False)
-        matches = DF_RAG[mask]
-        
-        if not matches.empty:
-            # 검색된 상품들을 후보군에 추가
-            all_matched_rows = pd.concat([all_matched_rows, matches])
+        matches = DF_RAG[mask].copy()
+        candidate_df = pd.concat([candidate_df, matches])
     
-    # 3. 상품 선별 로직 (핵심)
-    rag_html = ""
+    if candidate_df.empty: return "", ""
+    candidate_df = candidate_df.drop_duplicates(subset=['서비스명']).reset_index(drop=True)
+
+    # -----------------------------------------------------------
+    # [Step 3] 가중치 점수 계산 (Dynamic Scoring Loop)
+    # -----------------------------------------------------------
+    scores = []
+    reasons = []
+
+    for idx, row in candidate_df.iterrows():
+        score = 0
+        match_tags = []
+        
+        # 텍스트 데이터 (제목+설명)
+        full_text = (str(row['서비스명']) + " " + str(row['상세설명']))
+        
+        # 상품 가격 파싱 (숫자만 추출)
+        try: item_price = int(re.sub(r'[^0-9]', '', str(row['요금'])))
+        except: item_price = 0
+
+        # =========================================================
+        # [Logic A] 생애주기(Life Cycle) 매칭
+        # =========================================================
+        # 조건 1: 자녀가 있는 경우 (육아/교육/키즈) -> 최우선 순위
+        if has_child:
+            if any(k in full_text for k in ["자녀", "아이", "육아", "키즈", "EBS", "맘", "보호"]):
+                score += 50
+                match_tags.append("👶육아/키즈")
+
+        # 조건 2: 자녀는 없지만 결혼한 경우 (신혼/부부) -> 결합/공유 혜택
+        elif is_married: 
+            if any(k in full_text for k in ["부부", "신혼", "결합", "가족", "함께", "나눠"]):
+                score += 30
+                match_tags.append("💑부부결합")
+
+        # 조건 3: 미혼/싱글 (1인 가구) -> 개인화/보안/OTT
+        elif not is_married and not has_child:
+            if any(k in full_text for k in ["1인", "싱글", "혼자", "DIY", "개인", "CCTV"]):
+                score += 30
+                match_tags.append("👤1인가구")
+
+        # =========================================================
+        # [Logic B] 연령대(Age) 매칭
+        # =========================================================
+        if age >= 60: # 시니어
+            if any(k in full_text for k in ["효도", "시니어", "큰글씨", "쉬운", "골드", "안심"]):
+                score += 40
+                match_tags.append("👵시니어전용")
+        elif age <= 29: # 청년/대학생 (MZ)
+            if any(k in full_text for k in ["청년", "대학", "캠퍼스", "20대", "데이터 2배", "게임"]):
+                score += 40
+                match_tags.append("🎓YOUTH")
+        elif 30 <= age <= 50: # 직장인/경제활동 인구
+            if any(k in full_text for k in ["업무", "비즈니스", "구독", "오피스"]):
+                score += 10 # 소폭 가산
+
+        # =========================================================
+        # [Logic C] 지불 능력(Spending Power) 매칭
+        # =========================================================
+        if is_high_spender: 
+            # 돈을 많이 쓰는 사람은 '저렴한 것'보다 '혜택 좋은 것'을 좋아함 (Upselling)
+            if any(k in full_text for k in ["프리미엄", "VIP", "무제한", "최고", "시그니처"]):
+                score += 25
+                match_tags.append("👑VIP혜택")
+            # 너무 싼 상품(3만원 미만)은 오히려 감점 (니즈 불일치)
+            if item_price > 0 and item_price < 30000:
+                score -= 10 
+                
+        elif is_low_spender:
+            # 돈을 적게 쓰는 사람은 '가성비'가 중요
+            if item_price < 40000 and item_price > 0:
+                score += 40
+                match_tags.append("💰알뜰/절약")
+            if any(k in full_text for k in ["할인", "제휴", "무료", "0원"]):
+                score += 20
+
+        # =========================================================
+        # [Logic D] 콘텐츠 니즈 (2040 세대 공통)
+        # =========================================================
+        if 20 <= age <= 49:
+            # 넷플릭스, 유튜브 등 미디어 관련 상품 가산점
+            if any(k in full_text for k in ["넷플릭스", "유튜브", "티빙", "디즈니", "OTT"]):
+                score += 20
+                match_tags.append("🎬콘텐츠")
+
+        scores.append(score)
+        reasons.append(", ".join(match_tags) if match_tags else "AI 추천")
+
+    # 결과 저장 및 정렬
+    candidate_df['final_score'] = scores
+    candidate_df['reason_tags'] = reasons
+    
+    # 점수 높은 순 -> 가격 높은 순 (매출 증대 목적)으로 정렬
+    candidate_df = candidate_df.sort_values(by=['final_score', '요금'], ascending=[False, False])
+    
+    # -----------------------------------------------------------
+    # [Step 4] UI 결과 생성
+    # -----------------------------------------------------------
+    final_3_services = candidate_df.head(3)
+    
+    rag_html = "<div style='margin-bottom: 8px;'><strong>🎁 고객 프로필 기반 최적 상품 (Top 3)</strong></div>"
     rag_text = ""
-    
-    if not all_matched_rows.empty:
-        # (1) 중복 제거 (여러 카테고리에 걸친 상품이 있을 수 있음)
-        all_matched_rows = all_matched_rows.drop_duplicates(subset=['서비스명'])
-        
-        # (2) 딱 3개만 자르기 (CSV 상단에 있는 상품이 우선순위가 높다고 가정)
-        # 만약 '요금'이 비싼 순으로 하고 싶다면 여기서 .sort_values() 추가 가능
-        final_3_services = all_matched_rows.head(3)
-        
-        print(f"✅ [RAG 결과] 전체 {len(all_matched_rows)}개 후보 중 상위 3개 선별 완료")
 
-        # (3) 최종 3개 상품에 대해서만 텍스트/HTML 생성
-        rag_html += "<div style='margin-bottom: 8px;'><strong>🎁 AI 추천 베스트 상품 (TOP 3)</strong></div>"
-        
-        for _, row in final_3_services.iterrows():
-            # 데이터 추출
-            cat_name = row.get('카테고리', '기타')
-            service_name = row.get('서비스명', '이름 없음')
-            price = row.get('요금', '가격 정보 없음')
-            desc = str(row.get('상세설명', ''))[:40] # 설명은 짧게
+    for i, row in final_3_services.iterrows():
+        cat_name = row.get('카테고리', '기타')
+        service_name = row.get('서비스명', '이름 없음')
+        price = row.get('요금', '가격 정보 없음')
+        desc = str(row.get('상세설명', ''))[:45]
+        tags = row['reason_tags']
 
-            # 1) UI용 HTML 생성
-            rag_html += f"""
-            <div style="font-size: 12px; color: #4b5563; margin-bottom: 6px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff;">
-                <div style="font-size: 10px; color: #6366f1; font-weight: bold; margin-bottom: 2px;">{cat_name}</div>
-                <div style="font-weight:700; color:#1f2937; font-size: 13px;">{service_name}</div>
-                <div style="color:#059669; font-size: 12px; font-weight: 600;">{price}</div>
-                <div style="color:#9ca3af; font-size: 11px; margin-top: 2px;">{desc}...</div>
+        rag_html += f"""
+        <div style="font-size: 12px; color: #4b5563; margin-bottom: 6px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; background: #fff;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size: 10px; color: #6366f1; font-weight: bold;">{cat_name}</span>
+                <span style="font-size: 9px; background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:12px; font-weight:600;">{tags}</span>
             </div>
-            """
-            
-            # 2) LLM 전달용 텍스트 생성 (상품명 리스트)
-            rag_text += f"👉 {service_name} ({price})\n"
-            
-    else:
-        print("⚠️ [RAG 실패] 매칭되는 상품이 하나도 없습니다.")
-        rag_text = "(추천 상품 없음)"
+            <div style="font-weight:700; color:#1f2937; font-size: 13px; margin-top:4px;">{service_name}</div>
+            <div style="color:#059669; font-size: 12px; font-weight: 600;">{price}</div>
+            <div style="color:#9ca3af; font-size: 11px; margin-top: 2px;">{desc}...</div>
+        </div>
+        """
+        rag_text += f"👉 {service_name} ({price})\n"
+
+    if not rag_text: rag_text = "(추천 상품 없음)"
 
     return rag_html, rag_text
 
@@ -215,7 +323,10 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         rec_cats = list(set(list_contrast + list_shap))
 
         # 실제 상품 정보 검색
-        rag_html_content, rag_text_content = get_rag_info_by_category(rec_cats)
+        rag_html_content, rag_text_content = get_rag_info_by_category(
+            recommended_categories=rec_cats, 
+            user_features=user_features_input
+        )
         
         # 나중에 문구 생성할 때 쓰기 위해 data 딕셔너리에 저장
         data['rag_context'] = rag_text_content
