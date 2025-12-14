@@ -46,15 +46,19 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
         shap_res = results.get('shap_analysis', {})
         contrast_res = results.get('contrastive_analysis', {})
 
+        #리스트를 문자열로 변환    
+        rec_services_list = contrast_res.get('recommended_services', [])
+        rec_services_str = ', '.join(rec_services_list)
+
         payment_guide = ""
         # 감지할 키워드 리스트 (데이터셋에 나오는 영어/한글 용어 모두 포함)
         target_keywords = ["신용카드", "계좌이체"]
         
         # 추천 리스트에 해당 키워드가 하나라도 있으면 특별 지침 추가
-        if any(keyword in contrast_res for keyword in target_keywords):
+        if any(keyword in rec_services_str for keyword in target_keywords):
             payment_guide = f"""
             **[⭐ 특별 미션: 결제 수단 변경 제안]**
-            - 분석 결과, 이 고객에게는 **'결제 수단 변경({contrast_res})'**이 추천되었습니다.
+            - 분석 결과, 이 고객에게는 **'결제 수단 변경({rec_services_str})'**이 추천되었습니다.
             - 마케팅 문구의 **마지막 줄**이나 **추신(P.S)** 형태로 아래 내용을 자연스럽게 추가하세요.
             - 예시 멘트: "참, 요금 납부 방식을 **신용카드/계좌이체**로 바꾸시면 매달 신경 쓸 필요 없이 훨씬 편리해요!" 
             """
