@@ -190,7 +190,7 @@ def get_rag_info_by_category(recommended_categories, user_features=None):
     # -----------------------------------------------------------
     final_3_services = candidate_df.head(3)
     
-    rag_html = "<div style='margin-bottom: 8px;'><strong>🎁 고객 프로필 기반 최적 상품 (Top 3)</strong></div>"
+    rag_html = ""
     rag_text = ""
 
     for i, row in final_3_services.iterrows():
@@ -335,7 +335,9 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         """
 
         # SHAP 추천 (방어 요인)
-        risk_factors_html = ""
+        risk_factors_html = """
+            <h4 style="font-size: 15px; margin-bottom: 10px; font-weight: 700;">📉 주요 이탈 요인</h4>
+        """
         shap_actions = shap_res.get('recommended_actions', [])
         if not shap_actions:
             risk_factors_html = "<div class='text-gray-400 text-sm p-2'>위험 요인이 없습니다.</div>"
@@ -352,11 +354,13 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
                 """
             
         # 대조분석 추천
-        opportunity_html = ""
+        opportunity_html = """
+            <h4 style="font-size: 15px; margin-bottom: 10px; font-weight: 700;">📈 다른 고객이 이용하는 서비스</h4>
+        """
         rec_services = contrast_res.get('recommended_services', [])
         for idx, item in enumerate(rec_services):
             opportunity_html += f"""
-            <div class="factor-item bg-blue-50 text-blue-700" style="border-left: 3px solid #3b82f6;">
+            <div class="factor-item bg-blue-50 text-blue-700" style="border-left: 3px solid #0db9f0;">
                 <div class="factor-icon">💎</div>
                 <div class="factor-text">
                     <span class="factor-label">추천 서비스 {idx+1}</span>
@@ -366,48 +370,13 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
             """
 
         # AI 제안 HTML 구성 (LLM 멘트 + RAG 상품 정보)
-        ai_proposal_html = f"""
-        <div class="card-content" style="height: 100%; background-color: #f0fdf4; border: 1px solid #bbf7d0;">
-            <div style="font-size: 14px; color: #15803d; margin-bottom: 12px; line-height: 1.5;">
-                🤖 <strong>AI의 한마디:</strong><br>{ai_suggestion}
-            </div>
-            <div style="background: white; padding: 8px; border-radius: 6px; border: 1px solid #e5e7eb;">
-                <div style="font-size: 12px; font-weight: bold; color: #4b5563; margin-bottom: 6px; border-bottom: 1px solid #eee; padding-bottom: 4px;">🎁 추천 상품 상세</div>
-                {rag_html_content if rag_html_content else "<div style='color:#9ca3af; font-size:11px;'>매칭된 상품 없음</div>"}
-            </div>
-        </div>
+        ai_proposal_html = """
+            <h4 style="font-size: 15px; margin-bottom: 10px; font-weight: 700;">🎁 LGU+ 상품 제안</h4>
         """
-        
-        analysis_html = f"""
-        <div class="card-content">
-            
-            <!-- 섹션 1: 이탈 위험 요인 -->
-            <div style="margin-bottom: 16px;">
-                <h4 style="font-size: 13px; color: #ef4444; margin-bottom: 8px; font-weight: 700;">📉 주요 이탈 요인</h4>
-                <div class="factors-list" style="max-height: 200px; overflow-y: auto;">
-                    {risk_factors_html}
-                </div>
-            </div>
-
-            <!-- 섹션 2: 추천 서비스 -->
-            <div style="margin-bottom: 16px;">
-                <h4 style="font-size: 13px; color: #3b82f6; margin-bottom: 8px; font-weight: 700;">📈 다른 고객이 이용하는 서비스</h4>
-                <div class="factors-list" style="max-height: 140px; overflow-y: auto;">
-                    {opportunity_html}
-                </div>
-            </div>
-
-            <!-- 섹션 3: 실제 상품 제안 -->
-            <div style="margin-top: 16px; padding: 10px; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px;">
-                <h4 style="color: #4b5563; font-size: 13px; margin-bottom: 8px;">🎁 LGU+ 실제 상품 제안</h4>
-                <div class="factors-list" style="max-height: 140px; overflow-y: auto;">
-                    {ai_proposal_html}
-                </div>
-            </div>
-
-            <!-- 하단 인사이트 박스 -->
-            <div class="recommendation-box">
-                💡 <strong>마케팅 전략:</strong> {contrast_res.get('insight_message')}
+        ai_proposal_html += f"""
+        <div class="card-content" style="height: 100%; background-color: #f0fdf4; border: 1px solid #bbf7d0;">
+            <div style="background: white; padding: 8px; border-radius: 6px; border: 1px solid #e5e7eb;">
+                {rag_html_content if rag_html_content else "<div style='color:#9ca3af; font-size:11px;'>매칭된 상품 없음</div>"}
             </div>
         </div>
         """
@@ -419,6 +388,10 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
                 <div class="avatar">👩🏻</div>
                 <div class="user-name">{profile.get('customer_id')}</div>
                 <div class="user-id">성별: {profile.get('gender')}</div>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label2">이탈 확률</span>
+                <span class="stat-value2">{churn_val} %</span>
             </div>
             <div class="stat-row">
                 <span class="stat-label">가입 기간</span>
@@ -435,7 +408,7 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
         </div>
         """
 
-        return data, score_html, analysis_html, profile_html, gr.update(interactive=True)
+        return data, risk_factors_html, opportunity_html, ai_proposal_html, profile_html, gr.update(interactive=True)
 
     except Exception as e:
         err_msg = f"분석 오류: {str(e)}"
@@ -501,7 +474,7 @@ def generate_message_action(user_data_state, consult_text, api_key):
     [문구 생성] 버튼 클릭 시 LLM 호출
     """
     if not user_data_state:
-        return gr.update(visible=False), "⚠️ 먼저 [분석]을 실행해주세요."
+        return gr.update(visible=False), "⚠️먼저 '분석'을 실행해주세요."
     
     # 1. State에서 RAG 정보 꺼내기
     rag_info_text = user_data_state.get('rag_context', "")
@@ -527,7 +500,21 @@ def generate_message_action(user_data_state, consult_text, api_key):
         return gr.update(visible=False), full_message
 
     candidates = parse_generated_text(full_message)
-    return gr.update(choices=candidates, value=None, visible=True), "✅ 마케팅 문구가 생성되었습니다."
+
+    chat_bubble_html = f"""
+    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 12px; margin-top: 10px; border: 1px solid #e5e7eb;">
+        <div class="chat-bubble-ai" style="display: flex; gap: 12px; align-items: flex-start;">
+            <div class="chat-avatar" style="width: 36px; height: 36px; background: #4f46e5; color: white; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold;">AI</div>
+            <div class="chat-text" style="background: white; padding: 16px; border-radius: 0 16px 16px 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); line-height: 1.6; color: #374151; width: 100%;">
+                문구가 생성되었습니다. 선택하여 전송하세요. 
+            </div>
+        </div>
+        <div style="text-align: right; margin-top: 8px;">
+            <span style="font-size: 11px; color: #9ca3af;">전송 미리보기 • 방금 전</span>
+        </div>
+    </div>
+    """
+    return gr.update(choices=candidates, value=None, visible=True), chat_bubble_html
 
 def display_selected_message(selected_text):
     """
@@ -550,15 +537,6 @@ def display_selected_message(selected_text):
     </div>
     """
     return chat_bubble_html, selected_text # HTML과 텍스트(전송용) 반환
-
-def send_message_action(message_text):
-    if not message_text:
-        return "전송할 메시지가 없습니다."
-        
-    time.sleep(0.5)
-    return f"메시지가 성공적으로 전송되었습니다!"
-
-
 
 # ==========================================
 # 4. Gradio UI 구성
@@ -596,7 +574,7 @@ with gr.Blocks() as demo:
 
     # 헤더
     with gr.Row():
-        gr.Markdown("# 🛡️ 고객 이탈 방어 & 초개인화 마케팅 대시보드")
+        gr.Markdown("# 🛡️ 지킴톡")
 
         # 유저 피처 입력 영역
     with gr.Accordion("유저 데이터", open=False):
@@ -617,10 +595,10 @@ with gr.Blocks() as demo:
             btn_analyze = gr.Button("🔍 분석", variant="primary", size="lg")
         
     # --- [상단] 대시보드 영역 ---
-    with gr.Row(equal_height=True):
+    with gr.Row():
         
         # 1. 고객 정보 카드
-        with gr.Column(scale=1):
+        with gr.Column(scale=0.8):
             user_profile_html = gr.HTML(
                 """
                 <div class="dashboard-card">
@@ -633,26 +611,41 @@ with gr.Blocks() as demo:
                 """
             )
             
-        # 2. 이탈 스코어 카드
-        with gr.Column(scale=1):
-            churn_score_html = gr.HTML(
+        # 2. 주요 이탈 요인
+        with gr.Column(scale=0.8):
+            risk_factors_html = gr.HTML(
                 """
                 <div class="dashboard-card">
-                    <div class="card-title">CHURN RISK SCORE</div>
-                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>이탈 확률을 확인하세요.</div>
+                    <div class="card-title">📉 주요 이탈 요인</div>
+                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>이탈 요인을 확인하세요.</div>
                 </div>
                 """
             )
+        
+        with gr.Row(scale=1):
+            # 3. 대조분석 결과
+            with gr.Column(scale=1):
+                contrast_analysis_html = gr.HTML(
+                    """
+                    <div class="dashboard-card">
+                        <div class="card-title">📈 다른 고객이 이용하는 서비스</div>
+                        <div class="empty-state">'분석 실행' 버튼을 눌러<br>다른 고객이 이용하는 서비스를 확인하세요.</div>
+                    </div>
+                    """
+                )
+            
+            # 4. AI 맞춤 제안 & 상품
+            with gr.Column(scale=1):
+                ai_analysis_html = gr.HTML(
+                    """
+                    <div class="dashboard-card">
+                        <div class="card-title">🎁 LGU+ 상품 제안</div>
+                        <div class="empty-state">'분석 실행' 버튼을 눌러<br>AI 맞춤 제안 & 상품을 확인하세요.</div>
+                    </div>
+                    """
+                )
 
-        # 3. AI 맞춤 제안 & 상품
-        with gr.Column(scale=1):
-            ai_analysis_html = gr.HTML(
-                """
-                <div class="dashboard-card">
-                    <div class="empty-state">'분석 실행' 버튼을 눌러<br>AI 맞춤 제안 & 상품을 확인하세요.</div>
-                </div>
-                """
-            )
+
 
     # --- [하단] 액션 영역 ---
     gr.Markdown("# 📱 마케팅 문구 추천")
@@ -665,17 +658,13 @@ with gr.Blocks() as demo:
 
             # 생성된 문구 리스트
             gr.Markdown("#### 2. 마케팅 문구 추천")
-            msg_options_radio = gr.Radio(choices=[], visible=True, interactive=True)
+            msg_options_radio = gr.Radio(label="문구 선택", choices=[], visible=True, interactive=True)
             
 
         # [오른쪽] 선택된 문구 전송
         with gr.Column(scale=2):
             gr.Markdown("#### 3. 메시지 전송")
             message_display_html = gr.HTML(label="미리보기")
-
-            with gr.Row():
-                send_status = gr.Textbox(label="전송 상태", interactive=False, scale=2)
-                btn_send_msg = gr.Button("🚀 메시지 전송", variant="secondary", scale=1, interactive=False)
 
     # ==========================================
     # 5. 이벤트 연결
@@ -685,14 +674,14 @@ with gr.Blocks() as demo:
     btn_analyze.click(
         fn=analyze_customer,
         inputs=[input_user_id, input_consult_text, input_feature_json, api_key],
-        outputs=[user_state, churn_score_html, ai_analysis_html, user_profile_html, btn_send_msg]
+        outputs=[user_state, risk_factors_html, contrast_analysis_html, ai_analysis_html, user_profile_html]
     )
 
     # 2) 문구 생성 버튼 클릭
     btn_gen_msg.click(
         fn=generate_message_action,
         inputs=[user_state, input_consult_text, api_key],
-        outputs=[msg_options_radio, send_status]
+        outputs=[msg_options_radio, message_display_html]
     )
 
     # 3) 라디오 버튼 선택 시
@@ -700,17 +689,6 @@ with gr.Blocks() as demo:
         fn=display_selected_message,
         inputs=[msg_options_radio],
         outputs=[message_display_html, message_state]
-    ) .then(
-        lambda: gr.update(interactive=True), None, [btn_send_msg]
-    )
-
-    # 4) 메시지 전송 버튼 클릭
-    btn_send_msg.click(
-        fn=send_message_action,
-        inputs=[message_state],
-        outputs=[send_status]
-    ) .then(
-        lambda: gr.update(interactive=False), None, [btn_send_msg]
     )
 
 
