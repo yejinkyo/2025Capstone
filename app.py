@@ -635,7 +635,6 @@ with gr.Blocks() as demo:
                 )
             
             # 4. AI 맞춤 제안 & 상품
-            with gr.Column(scale=1):
                 ai_analysis_html = gr.HTML(
                     """
                     <div class="dashboard-card">
