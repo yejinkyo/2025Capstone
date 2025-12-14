@@ -42,27 +42,9 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
     try:
         profile = data.get('customer_profile', {})
         results = data.get('analysis_results', {})
-        
+
         shap_res = results.get('shap_analysis', {})
         contrast_res = results.get('contrastive_analysis', {})
-
-        #리스트를 문자열로 변환    
-        rec_services_list = contrast_res.get('recommended_services', [])
-        rec_services_str = ', '.join(rec_services_list)
-
-        payment_guide = ""
-        # 감지할 키워드 리스트 (데이터셋에 나오는 한글 용어 포함)
-        target_keywords = ["신용카드", "계좌이체"]
-        
-        # 추천 리스트에 해당 키워드가 하나라도 있으면 특별 지침 추가
-        if any(keyword in rec_services_str for keyword in target_keywords):
-            payment_guide = f"""
-            **⭐결제 수단 변경 제안**
-            - 분석 결과, 이 고객에게는 **'결제 수단 변경({rec_services_str})'**이 추천되었습니다.
-            - 마케팅 문구의 **마지막 줄**에 아래 내용을 자연스럽게 추가하세요.
-            - 예시 멘트: "참, 요금 납부 방식을 **신용카드/계좌이체**로 바꾸시면 매달 신경 쓸 필요 없이 훨씬 편리해요!" 
-            - 이 내용은 상품 DB에 없어도 **반드시** 작성해야 합니다.
-            """
 
         # RAG 텍스트가 비어있을 경우 대비 (기본 문구)
         if not rag_info_text:
@@ -80,14 +62,13 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
         - **해결 솔루션(대조분석):** {', '.join(contrast_res.get('recommended_services', []))}
         - **제안 포인트:** 유사한 불만을 가졌던 다른 고객들이 만족한 서비스입니다.
         
-        
         [3] [데이터가 발견한 잠재 니즈 (SHAP, 근본적 니즈)]
         - **위험/기회 요인:** {shap_res.get('reasoning', '데이터 패턴 감지')}
         - **필요 조치:** {', '.join(shap_res.get('recommended_actions', []))}
         - **제안 포인트:** 고객님은 모르고 계시지만, 데이터 패턴상 꼭 챙겨야 할 혜택입니다.
              
         [추천 상품 DB (RAG 검색 결과)]
-        **아래 상품 중 위 솔루션(A, B)과 가장 잘 맞는 것을 골라 구체적인 상품명과 가격, 그리고 상품에 대한 설명을 언급하세요.**
+        **아래 상품 중 위 솔루션(A, B)과 가장 잘 맞는 것을 골라 구체적인 상품명과 가격을 언급하세요.**
         ---------------------------------------------------
         {rag_info_text}
         ---------------------------------------------------
@@ -96,27 +77,22 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
         # 2. 지시사항 (수정 없음)
         instruction = f"""
         위 정보를 바탕으로 다음 **2가지 버전**의 마케팅 문구를 각각 작성해주세요.
-        
-        {payment_guide}
 
         **[공통 필수 규칙]**
         - 모든 문구의 **첫 줄**은 **추천 상품 DB (RAG 검색 결과)**에서 확인된 가장 강력한 혜택을 활용하여 **새로운 혜택 제목**을 만들어 시작하세요. (예: [프리미엄 셋탑박스 3년 무료 안내])
         - "분석해보니"라는 말 대신 "고객님께 딱 맞는", "놓치고 계신"이라는 표현을 쓰세요.
-        - 각 버전마다 **상품 추천**과 **추가 조언**을 포함하세요.
         - 모든 제안 상품과 가격은 반드시 **추천 상품 DB (RAG 검색 결과)**에 나열된 리스트 안에서만 골라야 합니다. (없는 상품 지어내기 절대 금지)
 
         **[상담 해결형 (Consultation & Contrastive Focus)]**
         - **로직:** [소스 A]의 **상담 내용**과 **유사 고객 성공 사례**에 집중하세요.
         - **전략:** 1. 추천 상품 DB (RAG 검색 결과) 중에서 **고객의 불만을 잠재울 수 있는 상품(예: 요금제 인하, 결합 할인, 고성능 장비)**을 하나 고르세요.
          2. "고객님, 아까 말씀하신 '{consult_text}' 문제, 다른 분들은 이렇게 해결했습니다." 라는 톤으로 접근하세요.
-         3. (중요) 결제 수단 변경 지침이 있다면 마지막에 꼭 포함하세요.
         - **목표:** 고객의 즉각적인 불만 해소 및 솔루션 제시.
 
         **[혜택 발굴형 (SHAP & Data Focus)]**
         - **로직:** [소스 B]의 **잠재 니즈**와 **데이터 패턴**에 집중하세요. (상담 내용은 언급 금지)
         - **전략:** 1. 추천 상품 DB (RAG 검색 결과) 중에서 **데이터 분석 결과(이탈 위험 요인)를 방어하기에 가장 좋은 혜택(예: OTT 무료, 장기 고객 쿠폰)**을 고르세요.
         2. 고객은 인지하지 못했지만, 데이터가 찾아낸 **숨겨진 혜택**이나 **놓치고 있는 결합/할인**을 챙겨주세요.
-        3. (중요) 결제 수단 변경 지침이 있다면 마지막에 꼭 포함하세요.
         - **목표:** "어? 나한테 이런 혜택이 있었어?"라는 Surprise 요소 제공..
 
         """
