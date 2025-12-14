@@ -217,35 +217,6 @@ def get_rag_info_by_category(recommended_categories, user_features=None):
 
     return rag_html, rag_text
 
-import re
-
-def parse_generated_text(text):
-    """
-    LLM 출력을 버전별로 분리하여 순수한 텍스트 리스트로 반환하는 함수 (강화된 Regex)
-    """
-    # 분리할 패턴 정의 (버전 헤더를 찾아서 자름)
-    pattern = r"(?:^|\n)(?:\*\*|\[|#+\s)?(?:버전|옵션|Version|Option)\s?\d+.*?(?:\*\*|\]|:)?"
-    
-    # 텍스트 분리
-    parts = re.split(pattern, text, flags=re.IGNORECASE)
-    
-    # 공백 제거 및 필터링
-    options = []
-    for p in parts:
-        clean_p = p.strip()
-        # 내용이 너무 짧은 경우(헤더만 남은 경우 등) 제외하고 추가
-        if len(clean_p) > 10: 
-            options.append(clean_p)
-    
-    # 만약 분리에 실패했다면(옵션이 1개도 안 나오면)
-    if not options:
-        # 비상 대책: "버전" 키워드가 포함된 줄을 기준으로 강제 분리 시도
-        if "버전" in text:
-             return [t.strip() for t in text.split("버전") if len(t.strip()) > 10]
-        return [text] # 그래도 안 되면 통째로 반환
-
-    return options
-
 def generate_short_suggestion(consult_text, rec_services, rag_info, api_key):
     """대시보드용 짧은 AI 제안 생성 (LLM 호출)"""
     if not api_key: return "API 키를 입력해주세요."
@@ -474,35 +445,52 @@ def analyze_customer(user_id, consult_text, new_user_features_json, api_key_inpu
 import re
 
 def parse_generated_text(text):
-    """LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수"""
+    """
+    LLM 출력을 개별 메시지 옵션으로 분리하는 헬퍼 함수.
     
-    # 정규식 패턴 수정: 줄바꿈 조건 (?:^|\n)을 제거하고, 구분자 패턴을 명확히 합니다.
-    # 텍스트 전체에서 '**[버전 N:' 형태를 찾습니다.
-    # **와 ]**를 기준으로 패턴을 명확히 정의합니다.
-    # ( ) 괄호로 패턴을 캡처 그룹으로 만들어, re.split 시 이 패턴도 결과에 포함되게 합니다.
-    pattern = r"(\*\*\[버전\s?\d+.*?\]\*\*)" 
+    1. **[상담 해결형]** 또는 **[혜택 발굴형]** 헤더를 구분자로 사용해 텍스트를 분리합니다.
+    2. 추출된 내용에서 파싱 헤더, Markdown 잔여물, **굵은 표시용 마크다운**을 모두 제거하고 순수 메시지 내용만 추출합니다.
+    """
+    
+    # 1. 헤더 구분자 패턴 정의 (예: **[상담 해결형 - ... ]**)
+    # **[** 로 시작하고 **형]** 으로 끝나는 모든 캡처 그룹을 분리합니다.
+    pattern_header = r"(\*\*\[.*?형.*?\])" 
 
-    # 캡처 그룹을 사용하여 분할하면, parts 리스트는 [잔여물, 패턴1, 내용1, 패턴2, 내용2, ...] 순이 됩니다.
-    parts = re.split(pattern, text, flags=re.IGNORECASE)
+    parts = re.split(pattern_header, text, flags=re.IGNORECASE)
     options = []
     
-    # LLM이 출력한 전체 텍스트에서 버전 제목과 내용을 분리하여 options 리스트에 추가합니다.
+    header = ""
     for i in range(1, len(parts)):
-        # 홀수 인덱스 = 버전 제목 (패턴)
         if i % 2 == 1:
             header = parts[i].strip()
-        # 짝수 인덱스 = 버전 내용 (본문)
         elif i % 2 == 0:
             content = parts[i].strip()
             
-            # 내용이 너무 짧은 경우 제외 (짧은 잔여물 필터링)
             if header and content and len(content) > 10: 
-                # 헤더와 내용을 합쳐 하나의 옵션으로 만듭니다. (사용자가 어떤 버전인지 알 수 있도록)
-                # 옵션 텍스트에서 불필요한 마크다운 기호들을 제거하는 로직이 필요할 수 있습니다.
-                final_option = f"{header.strip('*[] ')} - {content.strip()}"
+                
+                # -----------------------------------------------------------------
+                # ***** 새로운 수정: 강력 청소 로직 *****
+                
+                # 1. 메시지 시작/끝에 남은 불필요한 기호 제거 (---, *, - 등)
+                # 텍스트 시작 부분에서 줄바꿈, 공백, 하이픈 잔여물, 목록 기호, 줄임표 등을 제거
+                content = re.sub(r'^(?:[\s\n]*|[\s\n]*[-*—]+\s*|[\s\n]*\.\.\.\s*)', '', content)
+                
+                # 2. 텍스트 내용 전체에서 ** 마크다운 제거
+                content = re.sub(r'\*\*', '', content)
+                
+                # 3. 텍스트 내용 전체에서 --- 또는 -- (하이픈 잔여물) 제거
+                content = re.sub(r'[-—]{2,}', '', content)
+                
+                # 4. 텍스트 내용 전체에서 단독으로 남아있는 * 기호 제거
+                content = re.sub(r'\*+', '', content)
+                
+                # -----------------------------------------------------------------
+                
+                # 최종적으로 공백을 정리합니다.
+                final_option = content.strip() 
                 options.append(final_option) 
 
-    # 파싱이 성공하지 못하면 원본 텍스트를 반환합니다.
+    # 파싱이 성공하지 못하면 (두 가지 버전이 모두 추출되지 않으면) 원본 텍스트를 반환합니다.
     if len(options) < 2:
         return [text] 
 
