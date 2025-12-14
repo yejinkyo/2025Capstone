@@ -46,6 +46,19 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
         shap_res = results.get('shap_analysis', {})
         contrast_res = results.get('contrastive_analysis', {})
 
+        payment_guide = ""
+        # 감지할 키워드 리스트 (데이터셋에 나오는 영어/한글 용어 모두 포함)
+        target_keywords = ["신용카드", "계좌이체"]
+        
+        # 추천 리스트에 해당 키워드가 하나라도 있으면 특별 지침 추가
+        if any(keyword in contrast_res for keyword in target_keywords):
+            payment_guide = f"""
+            **[⭐ 특별 미션: 결제 수단 변경 제안]**
+            - 분석 결과, 이 고객에게는 **'결제 수단 변경({contrast_res})'**이 추천되었습니다.
+            - 마케팅 문구의 **마지막 줄**이나 **추신(P.S)** 형태로 아래 내용을 자연스럽게 추가하세요.
+            - 예시 멘트: "참, 요금 납부 방식을 **신용카드/계좌이체**로 바꾸시면 매달 신경 쓸 필요 없이 훨씬 편리해요!" 
+            """
+
         # RAG 텍스트가 비어있을 경우 대비 (기본 문구)
         if not rag_info_text:
             rag_info_text = "(추천 상품 정보가 없습니다. 일반적인 VIP 요금 할인 혜택을 제안해주세요.)"
@@ -61,24 +74,26 @@ def format_user_prompt(data: dict, consult_text: str = "", rag_info_text: str = 
         - **고객 불만/요청:** "{consult_text}"
         - **해결 솔루션(대조분석):** {', '.join(contrast_res.get('recommended_services', []))}
         - **제안 포인트:** 유사한 불만을 가졌던 다른 고객들이 만족한 서비스입니다.
-
+        
+        
         [3] [데이터가 발견한 잠재 니즈 (SHAP, 근본적 니즈)]
         - **위험/기회 요인:** {shap_res.get('reasoning', '데이터 패턴 감지')}
         - **필요 조치:** {', '.join(shap_res.get('recommended_actions', []))}
         - **제안 포인트:** 고객님은 모르고 계시지만, 데이터 패턴상 꼭 챙겨야 할 혜택입니다.
              
         [추천 상품 DB (RAG 검색 결과)]
-        **아래 상품 중 위 솔루션(A, B)과 가장 잘 맞는 것을 골라 구체적인 상품명과 가격을 언급하세요.**
+        **아래 상품 중 위 솔루션(A, B)과 가장 잘 맞는 것을 골라 구체적인 상품명과 가격, 그리고 상품에 대한 설명을 언급하세요.**
         ---------------------------------------------------
         {rag_info_text}
         ---------------------------------------------------
         """
-
         
         # 2. 지시사항 (수정 없음)
         instruction = f"""
         위 정보를 바탕으로 다음 **3가지 버전**의 마케팅 문구를 각각 작성해주세요.
         
+        {payment_guide} <-- 조건부 지시사항
+
         **[공통 필수 규칙]**
         - 모든 문구의 **첫 줄**은 **추천 상품 DB (RAG 검색 결과)**에서 확인된 가장 강력한 혜택을 활용하여 **새로운 혜택 제목**을 만들어 시작하세요. (예: [프리미엄 셋탑박스 3년 무료 안내])
         - "분석해보니"라는 말 대신 "고객님께 딱 맞는", "놓치고 계신"이라는 표현을 쓰세요.
